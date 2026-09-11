@@ -10,16 +10,18 @@ description: "将剧本、分段文案或对白稿转换为可直接投喂 Seeda
 - 只做分镜化、画面化和提示词化，不改写剧本，不新增关键剧情、反转、人物关系或结局。
 - 原文事件、动作说明、台词、旁白、OS、说话人和用户提供的 `@素材` 必须保留。换行仅能按 [dialogue-normalization.md](references/dialogue-normalization.md) 做口播排版规范化。
 - 可补足不改变叙事的外观、材质、天气、光线、环境和动作细节。身份、关系、行动目标、冲突结果、说话人归属、时间或空间跳转不明确时，先追问。
-- 默认画幅 `16:9`。目标时长必须在本对话中确定为 `15 秒`或 `30 秒`；未确定时按 [duration-mode.md](references/duration-mode.md) 询问并在本对话保持默认。
+- 默认画幅 `16:9`。目标时长必须在本对话中确定为 `15 秒`或 `30 秒`；完整剧本还必须在生成前确定视频风格和是否输出资产列表。按 [intake-gate.md](references/intake-gate.md) 执行前置门禁。
 - 生成块是可独立投喂的视频提示词。`15 秒`块严格五个镜头；`30 秒`块按剧情密度使用 8-12 个镜头。
 - 每块自包含，禁止使用“同上”“沿用上一块”“参考前文”。局部修改只重写指定块和必要的相邻衔接。
 
-## 输入识别与速度
+## 输入识别与前置流程
 
 1. 用户明确指定“完整剧本”“分段文案”“只处理这段”或“修改镜头”时，以其说明为准；否则正文不超过 `1200` 字视为短分段，超过则为完整剧本。
-2. 完整剧本仅建一次人物、场景、道具、时间线和空间关系档案，并在后台建立 [generation-block-ledger.md](references/generation-block-ledger.md)。后续只读取当前段落及必要的前后状态，不重复输出完整资产分析。
-3. 分段文案先按事件与对白容量拆成块，再拆镜头。局部修改按 [local-modification.md](references/local-modification.md) 处理。
-4. 固定视觉层使用短而稳定的句子；详细规则只用于生成前台账与质检。按当前模式读取参考文件，不全量加载。
+2. 完整剧本正文超过 `150000` 个 Unicode 字符时，先暂停并询问是否误发送；用户确认无误后才继续。未确认前不得询问其他配置、生成分镜或把整稿当作片段处理。
+3. 完整剧本通过超大文件门禁后，只做一次人物、场景、道具、时间线、空间关系后台建档，并询问三个前置选项：目标时长、视频风格、是否输出资产列表。三项完成后等待用户发送片段；不得因收到完整剧本而自动生成开头。
+4. 无论是否输出资产列表，都必须完成后台资产建档。选择输出时按 [asset-list-spec.md](references/asset-list-spec.md) 输出；风格按 [style-profiles.md](references/style-profiles.md) 记录。
+5. 分段文案只有在前置配置完成后才按事件与对白容量拆成块，再拆镜头。局部修改按 [local-modification.md](references/local-modification.md) 处理。
+6. 固定视觉层使用短而稳定的句子；详细规则只用于生成前台账与质检。按当前模式读取参考文件，不全量加载。
 
 ## 生成流程
 
@@ -50,6 +52,7 @@ description: "将剧本、分段文案或对白稿转换为可直接投喂 Seeda
 - [camera-transition.md](references/camera-transition.md) 与 [spatial-continuity.md](references/spatial-continuity.md)：切镜动机、转场、轴线和块间承接。
 - [generation-block-ledger.md](references/generation-block-ledger.md) 与 [qc-fallback.md](references/qc-fallback.md)：覆盖台账、质量门禁和修复。
 - [asset-list-spec.md](references/asset-list-spec.md)、[style-profiles.md](references/style-profiles.md)、[local-modification.md](references/local-modification.md)：按需读取的资产、风格与局部修改规则。
+- [intake-gate.md](references/intake-gate.md)：完整剧本配置、超大文件确认和“等待片段后生成”的前置状态机。
 
 ## 核心约束
 
