@@ -39,9 +39,15 @@ AMBIGUOUS_SPEAKER = re.compile(
 EMPTY_SHOT = re.compile(
     r"(?:纯\s*空镜|无人物镜头|无人画面|"
     r"镜头任务\s*[：:][^；。\n]{0,24}空镜|"
-    r"当前画面\s*[：:][^；。\n]{0,24}无人物)"
+    r"当前画面\s*[：:][^；。\n]{0,24}无人物|"
+    r"画面与动作\s*[：:][^；。\n]{0,24}无人物)"
 )
-COMPOSITION_FIELD = re.compile(r"(?:^|[；;\n])\s*构图\s*[：:]")
+ACTION_FIELD = re.compile(r"(?:^|\n)\s*画面与动作\s*[：:]")
+COMPOSITION_FIELD = re.compile(r"(?:^|\n)\s*(?:摄影机与)?构图\s*[：:]")
+LEGACY_FRONTEND_FIELD = re.compile(
+    r"(?:^|[；;\n])\s*(?:镜头任务|唯一主目标|当前画面|动作起点|动作过程|"
+    r"可见结果|开场焦点依据|切镜动机|转场方式|镜头结束状态)\s*[：:]"
+)
 TAIL_SILENT_SIGNAL = re.compile(r"(?:无对白|无台词).{0,24}?(?:尾帧|缓冲)|(?:尾帧|缓冲).{0,24}?(?:无对白|无台词)")
 TAIL_SILENT_DURATION = re.compile(
     r"(?:最后|尾帧|结束前)[^。！？\n]{0,48}?0\.[3-8]\s*秒[^。！？\n]{0,36}?(?:无对白|无台词)|"
@@ -247,8 +253,11 @@ def remove_quoted_text(value: str) -> str:
 
 def block_target_duration(block_text: str, fallback: float) -> float:
     header = block_text.split("\n", 1)[0]
-    match = re.search(r"(?:总时长|时长)\s*[：:]\s*(\d+(?:\.\d+)?)\s*秒", header)
-    return float(match.group(1)) if match else fallback
+    pipe_match = re.search(r"[｜|]\s*(\d+(?:\.\d+)?)\s*秒\s*[｜|]", header)
+    if pipe_match:
+        return float(pipe_match.group(1))
+    labelled_match = re.search(r"(?:总时长|时长)\s*[：:]\s*(\d+(?:\.\d+)?)\s*秒", header)
+    return float(labelled_match.group(1)) if labelled_match else fallback
 
 
 def is_pure_empty_shot(shot_text: str) -> bool:
@@ -265,16 +274,30 @@ def validate_structure(output: str, duration: float) -> list[Diagnostic]:
     if not blocks:
         return [Diagnostic("ERROR", "未找到以“生成块 N”开头的生成块。")]
 
-    for block_number, block_text in blocks:
+    for block_index, (block_number, block_text) in enumerate(blocks):
         shots = parse_shots(block_text)
         target = block_target_duration(block_text, duration)
-        if abs(target - duration) > 0.05:
+        is_last = block_index == len(blocks) - 1
+        if abs(duration - 15) <= 0.05:
+            if not is_last and abs(target - 15) > 0.05:
+                diagnostics.append(
+                    Diagnostic("ERROR", f"非末尾生成块必须为 15 秒，当前块头为 {target:g} 秒。", block_number)
+                )
+            if is_last and (target < 4 - 0.05 or target > 15 + 0.05):
+                diagnostics.append(
+                    Diagnostic("ERROR", f"15 秒模式的末尾生成块只能为 4-15 秒，当前为 {target:g} 秒；不足 4 秒应暂存而不生成。", block_number)
+                )
+            if abs(target - 15) <= 0.05 and len(shots) != 5:
+                diagnostics.append(
+                    Diagnostic("ERROR", f"15 秒完整生成块必须有 5 个镜头，当前为 {len(shots)} 个。", block_number)
+                )
+            if is_last and 4 - 0.05 <= target < 15 - 0.05 and not 1 <= len(shots) <= 5:
+                diagnostics.append(
+                    Diagnostic("ERROR", f"4-<15 秒末尾生成块必须有 1-5 个镜头，当前为 {len(shots)} 个。", block_number)
+                )
+        elif abs(target - duration) > 0.05:
             diagnostics.append(
                 Diagnostic("ERROR", f"块头时长为 {target:g} 秒，与 --duration {duration:g} 秒不一致。", block_number)
-            )
-        if abs(target - 15) <= 0.05 and len(shots) != 5:
-            diagnostics.append(
-                Diagnostic("ERROR", f"15 秒生成块必须有 5 个镜头，当前为 {len(shots)} 个。", block_number)
             )
         if not shots:
             continue
@@ -283,8 +306,20 @@ def validate_structure(output: str, duration: float) -> list[Diagnostic]:
         empty_run = 0
         empty_total = 0
         for shot_number, shot_text in shots:
+            if not ACTION_FIELD.search(shot_text):
+                diagnostics.append(Diagnostic("ERROR", "缺少逐镜“画面与动作”字段。", block_number, shot_number))
             if not COMPOSITION_FIELD.search(shot_text):
-                diagnostics.append(Diagnostic("ERROR", "缺少逐镜“构图”字段。", block_number, shot_number))
+                diagnostics.append(Diagnostic("ERROR", "缺少逐镜“摄影机与构图”字段。", block_number, shot_number))
+            legacy_fields = LEGACY_FRONTEND_FIELD.findall(shot_text)
+            if len(legacy_fields) >= 5:
+                diagnostics.append(
+                    Diagnostic(
+                        "WARN",
+                        "疑似把后台导演字段逐项倾倒到正文；请合并为画面与动作、摄影机与构图及必要的可选行。",
+                        block_number,
+                        shot_number,
+                    )
+                )
             intervals = list(INTERVAL.finditer(shot_text))
             if not intervals:
                 diagnostics.append(Diagnostic("ERROR", "缺少“起点-终点秒”的时间区间。", block_number, shot_number))
@@ -397,7 +432,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     parser.add_argument("--source", required=True, type=Path, help="原始剧本文本路径")
     parser.add_argument("--output", required=True, type=Path, help="生成块提示词文本路径")
-    parser.add_argument("--duration", type=float, default=15.0, help="每个生成块目标时长，默认 15 秒")
+    parser.add_argument("--duration", type=float, default=15.0, help="常规生成块目标时长，默认 15 秒；15 秒模式允许最后一块为 4-15 秒")
     args = parser.parse_args(argv)
 
     if args.duration <= 0:
