@@ -1,6 +1,6 @@
 interface:
   display_name: "Seedance Shot Director"
   short_description: "工业级 Seedance 2.0/2.5 漫剧分镜"
-  default_prompt: "Use $seedance-shot-director for Seedance 2.0/2.5 shot direction; explicitly declared complete scripts skip all length counting, then show the fixed five-style menu and collect duration and asset-list preferences; in 15-second mode keep every full block at five shots, allow only the final 4-to-under-15-second block to use actual duration and 1-5 shots, and withhold sub-4-second source text verbatim with the required merge-next-time notice."
+  default_prompt: "Use $seedance-shot-director to prepare Seedance 2.0/2.5 storyboards; after configuration, preserve each submitted segment as original V0 and ask whether to create a marked, reviewable script enhancement or proceed directly from the original, never generating shots from an enhancement until the user confirms it."
 policy:
   allow_implicit_invocation: true
