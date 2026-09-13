@@ -6,7 +6,7 @@ import validate_dialogue_and_timeline as validator
 
 
 def block(duration=15, count=5, number=1):
-    lines = [f"生成块 {number:02d}｜{duration:g}秒｜16:9"]
+    lines = [f"生成块 {number:02d}｜{duration:g}秒｜16:9", "国风3D人物与旧布木石材质，无配乐，保留环境声。", "人物：陈默，青年，深色长衫。", "场景：坟间小路与两座墓碑。", "本块氛围与站位：阴天柔光，陈默站在两坟之间。", "收尾方式：独立收束"]
     for index in range(count):
         start = duration * index / count
         end = duration * (index + 1) / count
@@ -31,7 +31,7 @@ def notice(raw):
 def two_shot_monologue(chain=None):
     prompt = block()
     if chain:
-        prompt = prompt.replace("生成块 01｜15秒｜16:9", "生成块 01｜15秒｜16:9\n" + chain)
+        prompt = prompt.replace("[镜头1]", chain + "\n[镜头1]")
     prompt = prompt.replace(
         "时间区间：0.000000-3.000000秒。",
         "时间区间：0.000000-3.000000秒。\n" + speech("陈默OS", "原来我不是什么武侠男主，"),
@@ -56,10 +56,11 @@ class ValidatorTests(unittest.TestCase):
     def test_fifteen_four_shots_fails(self):
         self.assertHas(validator.validate_structure(block(count=4), 15), "5 个镜头", "ERROR")
 
-    def test_only_last_block_may_be_short(self):
+    def test_only_last_two_blocks_may_be_short(self):
         self.assertNoErrors(validator.validate_structure(block() + "\n" + block(8, 3, 2), 15))
         self.assertNoErrors(validator.validate_structure(block() + "\n\n" + block(8, 3, 2), 15))
-        self.assertHas(validator.validate_structure(block(8, 3) + "\n" + block(number=2), 15), "非末尾", "ERROR")
+        self.assertNoErrors(validator.validate_structure(block(13, 4) + "\n" + block(4, 1, 2), 15))
+        self.assertHas(validator.validate_structure(block(8, 3) + "\n" + block(number=2) + "\n" + block(number=3), 15), "非末尾", "ERROR")
 
     def test_four_seconds_is_inclusive_minimum(self):
         self.assertNoErrors(validator.validate_structure(block(4, 1), 15))
@@ -159,13 +160,13 @@ class ValidatorTests(unittest.TestCase):
     def test_exact_deferred_suffix_is_excluded(self):
         source = "陈默：「走。」\n陈默：「再见。」"
         prompt = block() + "\n" + speech("陈默", "走。") + "\n" + notice("陈默：「再见。」")
-        diagnostics = validator.validate(source, prompt, 15)
+        diagnostics = validator.validate(source, prompt, 15, allow_deferred=True)
         self.assertNoErrors(diagnostics)
         self.assertHas(diagnostics, "不足 4 秒仍须人工复核", "WARN")
 
     def test_only_deferred_text_does_not_require_video(self):
         raw = "陈默：「走。」"
-        self.assertNoErrors(validator.validate(raw, notice(raw), 15))
+        self.assertNoErrors(validator.validate(raw, notice(raw), 15, allow_deferred=True))
 
     def test_changed_or_non_suffix_deferred_text_fails(self):
         source = "陈默：「走。」\n陈默：「再见。」"
@@ -188,12 +189,12 @@ class ValidatorTests(unittest.TestCase):
         diagnostics = validator.validate_voice_pacing(source, two_shot_monologue(), 15)
         self.assertHas(diagnostics, "缺少“连续口播”", "ERROR")
 
-    def test_six_seconds_for_seventeen_units_is_rejected_as_slow(self):
+    def test_legacy_pacing_without_pause_budget_requires_review(self):
         source = "陈默OS：「原来我不是什么武侠男主，只是路边小兵。」"
         chain = "连续口播：陈默OS｜0.0-6.0秒｜短剧常速｜跨镜连续，镜头切换不停顿，仅按原标点自然换气。"
         diagnostics = validator.validate_voice_pacing(source, two_shot_monologue(chain), 15)
-        self.assertHas(diagnostics, "连续口播过慢", "ERROR")
-        self.assertHas(diagnostics, "17 个可发音单位", "ERROR")
+        self.assertHas(diagnostics, "估时偏慢", "WARN")
+        self.assertHas(diagnostics, "17 个可发音单位", "WARN")
 
     def test_natural_four_point_two_second_chain_passes(self):
         source = "陈默OS：「原来我不是什么武侠男主，只是路边小兵。」"

@@ -9,6 +9,7 @@ contracts that can be checked deterministically before a prompt is delivered.
 from __future__ import annotations
 
 import argparse
+import sys
 import re
 import unicodedata
 from collections import defaultdict
@@ -19,7 +20,7 @@ from typing import Iterable, Optional
 
 SOURCE_LINE = re.compile(
     r"^\s*(?P<speaker>[\u4e00-\u9fffA-Za-z0-9·_-]{1,32})"
-    r"\s*(?P<mode>[（(]\s*(?:OS|旁白)\s*[）)])?\s*[：:]\s*(?P<body>.+?)\s*$"
+    r"\s*(?P<mode>[（(]\s*(?:OS|旁白|对白|画外对白)\s*[）)])?\s*[：:]\s*(?P<body>.+?)\s*$"
 )
 BLOCK_HEADER = re.compile(r"(?m)^\s*生成块\s*(?P<number>\d+)\b")
 SHOT_HEADER = re.compile(r"(?m)^\s*\[镜头\s*(?P<number>\d+)\s*\]")
@@ -37,7 +38,7 @@ FIELD_HEADER = re.compile(
 )
 QUOTED_SOURCE_LABEL = re.compile(
     r"(?:^|[；;])[ \t]*(?P<speaker>[\u4e00-\u9fffA-Za-z0-9·_-]{1,32})"
-    r"\s*(?P<mode>[（(]\s*(?:OS|旁白)\s*[）)])?\s*[：:]?\s*$"
+    r"\s*(?P<mode>[（(]\s*(?:OS|旁白|对白|画外对白)\s*[）)])?\s*[：:]?\s*$"
 )
 READING_DIRECTIVE = re.compile(r"不念|(?<![\u4e00-\u9fff])念(?![\u4e00-\u9fff])|展示")
 CAMERA_MODE = re.compile(r"固定|静止机位|推近|推进|拉远|拉至|跟拍|跟随|随.*(?:上扬|移动)|横移|升降|摇摄|摇镜|环绕|上升|下降|俯冲|手持")
@@ -108,6 +109,8 @@ class Dialogue:
     speaker: str
     text: str
     line: int
+    chain_id: Optional[str] = None
+    reliable: bool = True
 
 
 @dataclass
@@ -134,18 +137,27 @@ def normalise_text(value: str) -> str:
     return re.sub(r"\s+", "", value)
 
 
-def canonical_speaker(name: str, mode: Optional[str] = None) -> str:
+def speaker_parts(name: str, mode: Optional[str] = None) -> tuple[str, str]:
     name = unicodedata.normalize("NFKC", name).strip()
-    compact_mode = unicodedata.normalize("NFKC", mode or "")
-    is_os = "OS" in compact_mode or name.endswith("OS")
-    is_narration = "旁白" in compact_mode or name == "旁白"
-    if name.endswith("OS"):
-        name = name[:-2]
-    if name.startswith("系统"):
-        name = "系统"
-    if is_narration:
-        return "旁白"
-    return name + ("OS" if is_os else "")
+    embedded = re.fullmatch(r"(.+?)\s*\((OS|旁白|对白|画外对白)\)", name)
+    if embedded:
+        name, embedded_mode = embedded.groups()
+        mode = mode or embedded_mode
+    elif name.endswith("OS"):
+        name, mode = name[:-2], mode or "OS"
+    kind = unicodedata.normalize("NFKC", mode or "").strip(" ()")
+    if name == "旁白" and not kind:
+        kind = "旁白"
+    return name.strip(), "OS" if kind == "OS" else "旁白" if kind == "旁白" else "对白"
+
+
+def canonical_speaker(name: str, mode: Optional[str] = None) -> str:
+    name, kind = speaker_parts(name, mode)
+    if kind == "OS":
+        return name + "OS"
+    if kind == "旁白" and name != "旁白":
+        return name + "（旁白）"
+    return name
 
 
 def quoted_portion(body: str, speaker: str) -> str:
@@ -178,7 +190,12 @@ def analyse_source_dialogue(source: str) -> tuple[list[Dialogue], list[Diagnosti
     masked = list(source)
     for quote in QUOTED_TEXT.finditer(source):
         line_start = source.rfind("\n", 0, quote.start()) + 1
-        label = QUOTED_SOURCE_LABEL.search(source[line_start:quote.start()])
+        prefix = source[line_start:quote.start()]
+        narrative_label = re.search(
+            r'(?:^|[。！？；;])[ \t]*(?P<speaker>[\u3400-\u9fffA-Za-z0-9·_-]{1,32}?)'
+            r'\s*(?P<mode>[（(]\s*(?:OS|旁白|对白|画外对白)\s*[）)])?'
+            r'(?:轻声|低声|大声)?(?:说道|问道|答道|说|问|答|喊|播报)[：:]?\s*$', prefix)
+        label = narrative_label or QUOTED_SOURCE_LABEL.search(prefix)
         body = next(value for value in quote.groups() if value is not None)
         line_number = source.count("\n", 0, quote.start()) + 1
         line_end = source.find("\n", quote.end())
@@ -229,7 +246,7 @@ def analyse_source_dialogue(source: str) -> tuple[list[Dialogue], list[Diagnosti
             continue
         previous = dialogues[-1]
         separator = "" if previous.text.endswith(("，", "。", "！", "？", "…", ",", ".", "!", "?")) else "，"
-        dialogues[-1] = Dialogue(speaker=previous.speaker, text=previous.text + separator + text, line=previous.line)
+        dialogues[-1] = Dialogue(speaker=previous.speaker, text=previous.text + separator + text, line=previous.line, reliable=False)
         diagnostics.append(Diagnostic("WARN", f"源文本第 {line_number} 行按无引号连续台词暂解析；须人工排除动作说明，覆盖并非确定。"))
     return sorted(dialogues, key=lambda entry: entry.line), diagnostics
 
@@ -286,30 +303,22 @@ def field_values(text: str, labels: set[str]) -> list[str]:
 
 
 def speaker_before_quote(prefix: str, source_speakers: Iterable[str]) -> Optional[str]:
-    """Find a named speaker immediately before a quoted line.
-
-    Source names anchor the parse so descriptive Chinese before a character name
-    cannot accidentally become part of that name.
-    """
-    candidate: Optional[tuple[int, str]] = None
-    for source_speaker in set(source_speakers) | {"系统", "旁白"}:
-        base = source_speaker[:-2] if source_speaker.endswith("OS") else source_speaker
-        if not base:
-            continue
-        pattern = re.compile(
-            re.escape(base)
-            + r"\s*(?P<mode>[（(]\s*(?:OS|旁白)\s*[）)]|OS|旁白)?"
-            + r"[^“”\"「」『』\n]{0,72}?"
-            + r"(?:" + SPEECH_VERBS + r")\s*[：:]?\s*$"
-        )
-        for match in pattern.finditer(prefix):
-            mode = match.group("mode")
-            key = canonical_speaker(base, mode)
-            if candidate is None or match.start() > candidate[0]:
-                candidate = (match.start(), key)
-    if candidate:
-        return candidate[1]
-    return None
+    """Parse explicit names/types; never collapse systems or named narrators."""
+    typed = re.search(r"(?:^|[\n；;])\s*[A-Za-z][\w-]*\s*[｜|]\s*([^｜|\n]+)\s*[｜|]\s*(对白|画外对白|OS|旁白)\s*[：:]?\s*$", prefix)
+    if typed:
+        return canonical_speaker(typed.group(1), typed.group(2))
+    label = re.search(r"(?:^|[\n；;])\s*([\u3400-\u9fffA-Za-z0-9·_-]{1,32})\s*(?:[（(]\s*(OS|旁白|对白|画外对白)\s*[）)])?\s*[：:]\s*$", prefix)
+    if label and (label.group(2) or label.group(1) in set(source_speakers) or not re.search(r'(?:' + SPEECH_VERBS + r')$', label.group(1))):
+        return canonical_speaker(label.group(1), label.group(2))
+    names = sorted({speaker_parts(x)[0] for x in source_speakers} | {"系统", "旁白"}, key=len, reverse=True)
+    for name in names:
+        pattern = re.compile(re.escape(name) + r"\s*(?P<mode>[（(]\s*(?:OS|旁白|对白|画外对白)\s*[）)]|OS|旁白)?(?:声音)?\s*(?:以[^“”\"「」『』\n]{0,60}?|用[^“”\"「」『』\n]{0,60}?)?(?:" + SPEECH_VERBS + r")\s*[：:]?\s*$")
+        match = pattern.search(prefix)
+        if match:
+            return canonical_speaker(name, match.group('mode'))
+    # An explicit new speaker is still parsed so additions remain hard errors.
+    generic = re.search(r"(?:^|[\n；;])\s*([\u3400-\u9fffA-Za-z0-9·_-]{1,32}?)(?:[（(](OS|旁白|对白|画外对白)[）)])?(?:以[^“”\n]{0,60}?的语气)?(?:" + SPEECH_VERBS + r")\s*[：:]?\s*$", prefix)
+    return canonical_speaker(generic.group(1), generic.group(2)) if generic else None
 
 
 def extract_output_dialogue(output: str, source_speakers: Iterable[str]) -> tuple[list[Dialogue], int]:
@@ -319,10 +328,11 @@ def extract_output_dialogue(output: str, source_speakers: Iterable[str]) -> tupl
         previous_end = 0
         for match in QUOTED_TEXT.finditer(field):
             text = normalise_utterance(next(value for value in match.groups() if value is not None))
-            prefix = field[max(previous_end, match.start() - 180):match.start()]
+            prefix = field[max(previous_end, match.start()-180):match.start()]
             speaker = speaker_before_quote(prefix, source_speakers)
+            identifier = re.search(r"(?:^|[\n；;])\s*([A-Za-z][\w-]*)\s*[｜|]", prefix)
             if speaker:
-                dialogues.append(Dialogue(speaker=speaker, text=text, line=0))
+                dialogues.append(Dialogue(speaker, text, 0, identifier.group(1) if identifier else None))
             else:
                 unassigned += 1
             previous_end = match.end()
@@ -416,7 +426,8 @@ def shot_risk_warnings(shot_text: str, seconds: Optional[float], block: str, sho
         next(value for value in quote.groups() if value is not None)
         for field in field_values(shot_text, {"台词"}) for quote in QUOTED_TEXT.finditer(field)
     )
-    if spoken and seconds is not None and seconds > 0:
+    has_voice_id = bool(re.search(r'(?m)^\s*台词[：:]\s*[A-Za-z][\w-]*\s*[｜|]', shot_text))
+    if spoken and seconds is not None and seconds > 0 and not has_voice_id:
         units = spoken_unit_count(spoken)
         # Upper end of the guideline, without pause costs: only a risk screen.
         if units / 5 > seconds:
@@ -435,124 +446,112 @@ def shot_risk_warnings(shot_text: str, seconds: Optional[float], block: str, sho
     return diagnostics
 
 
-def validate_structure(output: str, duration: float) -> list[Diagnostic]:
+def tail_buffer(block_text: str) -> Optional[float]:
+    fields = field_values(block_text, {'无对白尾帧'})
+    if not fields:
+        return None
+    match = re.search(r'最后\s*(\d+(?:\.\d+)?)\s*秒', fields[-1])
+    return float(match.group(1)) if match else None
+
+
+def ending_mode(block_text: str) -> str:
+    match = re.search(r'(?m)^\s*收尾方式[：:]\s*(独立收束|连续剪辑|剧情硬切)\s*$', block_text)
+    return match.group(1) if match else '独立收束'
+
+
+def validate_structure(output: str, duration: float, min_duration: float = 4.0, model: Optional[str] = None, duration_step: Optional[float] = None) -> list[Diagnostic]:
     diagnostics: list[Diagnostic] = []
     blocks = parse_blocks(output)
     if not blocks:
-        return [Diagnostic("ERROR", "未找到以“生成块 N”开头的生成块。")]
-    block_numbers = [int(number) for number, _ in blocks]
-    if len(block_numbers) != len(set(block_numbers)) or block_numbers != sorted(block_numbers):
-        diagnostics.append(Diagnostic("ERROR", "生成块编号重复或顺序错误。"))
-
-    for block_index, (block_number, block_text) in enumerate(blocks):
-        shots = parse_shots(block_text)
-        target = block_target_duration(block_text, duration)
-        is_last = block_index == len(blocks) - 1
-        if abs(duration - 15) <= EPSILON:
-            if not is_last and abs(target - 15) > EPSILON:
-                diagnostics.append(
-                    Diagnostic("ERROR", f"非末尾生成块必须为 15 秒，当前块头为 {target:g} 秒。", block_number)
-                )
-            if is_last and (target < 4 or target > 15):
-                diagnostics.append(
-                    Diagnostic("ERROR", f"15 秒模式的末尾生成块只能为 4-15 秒，当前为 {target:g} 秒；不足 4 秒应暂存而不生成。", block_number)
-                )
-            if abs(target - 15) <= EPSILON and len(shots) != 5:
-                diagnostics.append(
-                    Diagnostic("ERROR", f"15 秒完整生成块必须有 5 个镜头，当前为 {len(shots)} 个。", block_number)
-                )
-            if is_last and 4 <= target < 15 and not 1 <= len(shots) <= 5:
-                diagnostics.append(
-                    Diagnostic("ERROR", f"4-<15 秒末尾生成块必须有 1-5 个镜头，当前为 {len(shots)} 个。", block_number)
-                )
-        elif abs(target - duration) > EPSILON:
-            diagnostics.append(
-                Diagnostic("ERROR", f"块头时长为 {target:g} 秒，与 --duration {duration:g} 秒不一致。", block_number)
-            )
+        return [Diagnostic('ERROR', '未找到以“生成块 N”开头的生成块。')]
+    maximum = 15.0 if model == '2.0' else duration
+    if duration not in (15, 30) or duration > maximum:
+        diagnostics.append(Diagnostic('ERROR', '编译后 --duration 必须为15/30秒且不超过模型上限；2.0的30秒目标应编译为15秒以内块。'))
+    nums = [int(x[0]) for x in blocks]
+    if len(nums) != len(set(nums)) or nums != sorted(nums):
+        diagnostics.append(Diagnostic('ERROR', '生成块编号重复或顺序错误。'))
+    for index, (number, text) in enumerate(blocks):
+        header = next((line.strip() for line in text.splitlines() if line.strip()), '')
+        match = re.fullmatch(r'生成块\s*\d+\s*[｜|]\s*(\d+(?:\.\d+)?)秒\s*[｜|]\s*\d+:\d+', header)
+        if not match:
+            diagnostics.append(Diagnostic('ERROR', '块标题必须明确实际时长与画幅：生成块 01｜15秒｜16:9。', number))
+        target = block_target_duration(text, duration)
+        if target < min_duration-EPSILON or target > maximum+EPSILON:
+            diagnostics.append(Diagnostic('ERROR', f'块时长只能为 {min_duration:g}-{maximum:g} 秒，当前为 {target:g} 秒。', number))
+        if duration_step and abs(target/duration_step-round(target/duration_step)) > EPSILON:
+            diagnostics.append(Diagnostic('ERROR', '时长不符合已配置入口步长。', number))
+        if index < len(blocks)-2 and abs(target-duration)>EPSILON:
+            diagnostics.append(Diagnostic('ERROR', '非末尾两块必须为完整目标时长；仅最后两块可联合调整。', number))
+        shots = parse_shots(text)
+        preamble = text[:SHOT_HEADER.search(text).start()] if SHOT_HEADER.search(text) else text
+        nonempty = [line.strip() for line in preamble.splitlines() if line.strip()]
+        if len(nonempty)<2 or re.match(r'^(人物|场景|本块氛围与站位|收尾方式|口播段|连续口播)[：:]', nonempty[1]):
+            diagnostics.append(Diagnostic('ERROR', '标题后缺少实际风格与声音方案。', number))
+        for label in ('人物','场景','本块氛围与站位','收尾方式'):
+            if not re.search(r'(?m)^\s*'+label+r'[：:]\s*\S[^\n]*$', preamble):
+                diagnostics.append(Diagnostic('ERROR', f'缺少块头“{label}”字段。', number))
+        if not re.search(r'(?m)^\s*收尾方式[：:]\s*(独立收束|连续剪辑|剧情硬切)\s*$', preamble):
+            diagnostics.append(Diagnostic('ERROR', '收尾方式只能为独立收束、连续剪辑或剧情硬切。', number))
+        if re.search(r'<[^<>\n]+>', remove_quoted_text(text)) or re.search(r'🟩|🟦|🟨|🟥|【(?:细节增强|新增动作|文字修正|用户修订)', text):
+            diagnostics.append(Diagnostic('ERROR', '正文仍含模板占位符或剧本审阅标记。', number))
         if not shots:
-            diagnostics.append(Diagnostic("ERROR", "生成块中没有编号镜头。", block_number))
+            diagnostics.append(Diagnostic('ERROR', '生成块中没有编号镜头。', number))
             continue
-        if [int(number) for number, _ in shots] != list(range(1, len(shots) + 1)):
-            diagnostics.append(Diagnostic("ERROR", "镜头编号必须从 1 开始连续递增且不重复。", block_number))
-
-        previous_end: Optional[float] = None
-        empty_run = 0
-        empty_total = 0
-        for shot_number, shot_text in shots:
-            if not ACTION_FIELD.search(shot_text):
-                diagnostics.append(Diagnostic("ERROR", "缺少逐镜“画面与动作”字段。", block_number, shot_number))
-            if not COMPOSITION_FIELD.search(shot_text):
-                diagnostics.append(Diagnostic("ERROR", "缺少逐镜“摄影机与构图”字段。", block_number, shot_number))
-            legacy_fields = LEGACY_FRONTEND_FIELD.findall(shot_text)
-            if len(legacy_fields) >= 5:
-                diagnostics.append(
-                    Diagnostic(
-                        "WARN",
-                        "疑似把后台导演字段逐项倾倒到正文；请合并为画面与动作、摄影机与构图及必要的可选行。",
-                        block_number,
-                        shot_number,
-                    )
-                )
-            # Only the declared timeline may define shot duration. Camera ranges
-            # such as “2-3米” must not masquerade as time when a field is absent.
-            time_line = re.search(r"(?m)^\s*时间(?:区间)?\s*[：:]\s*([^\n]+)", shot_text)
-            intervals = list(INTERVAL.finditer(time_line.group(1))) if time_line else []
-            shot_seconds = None
-            if not intervals:
-                diagnostics.append(Diagnostic("ERROR", "缺少“起点-终点秒”的时间区间。", block_number, shot_number))
+        if [int(n) for n,_ in shots] != list(range(1,len(shots)+1)):
+            diagnostics.append(Diagnostic('ERROR','镜头编号必须从 1 开始连续递增且不重复。',number))
+        if abs(target-15)<=EPSILON and len(shots)!=5:
+            diagnostics.append(Diagnostic('ERROR',f'15 秒完整生成块必须有 5 个镜头，当前为 {len(shots)} 个。',number))
+        elif target<15 and not 1<=len(shots)<=5:
+            diagnostics.append(Diagnostic('ERROR','短于15秒的收尾块必须有1-5个镜头。',number))
+        elif abs(target-30)<=EPSILON and not 8<=len(shots)<=12:
+            diagnostics.append(Diagnostic('WARN','30秒通常8-12镜；当前偏离，请复核导演依据和观看时间。',number))
+        previous_end = None
+        empty_run = empty_total = 0
+        for shot_number, shot in shots:
+            for label in ('画面与动作','摄影机与构图'):
+                if not re.search(r'(?m)^\s*'+label+r'[：:]\s*\S[^\n]*$', shot):
+                    diagnostics.append(Diagnostic('ERROR',f'缺少逐镜“{label}”字段。',number,shot_number))
+            time_line = re.search(r'(?m)^\s*时间(?:区间)?[：:]\s*([^\n]+)',shot)
+            interval = INTERVAL.search(time_line.group(1)) if time_line else None
+            seconds = None
+            if not interval:
+                diagnostics.append(Diagnostic('ERROR','缺少“起点-终点秒”的时间区间。',number,shot_number))
             else:
-                interval = intervals[0]
-                start = float(interval.group("start"))
-                end = float(interval.group("end"))
-                shot_seconds = end - start
-                if end <= start:
-                    diagnostics.append(Diagnostic("ERROR", f"时间区间 {start:g}-{end:g} 秒无效。", block_number, shot_number))
-                if previous_end is None:
-                    if abs(start) > EPSILON:
-                        diagnostics.append(Diagnostic("ERROR", f"首镜必须从 0 秒开始，当前为 {start:g} 秒。", block_number, shot_number))
-                elif abs(start - previous_end) > EPSILON:
-                    diagnostics.append(
-                        Diagnostic(
-                            "ERROR",
-                            f"时间轴不连续：上一镜结束于 {previous_end:g} 秒，当前从 {start:g} 秒开始。",
-                            block_number,
-                            shot_number,
-                        )
-                    )
-                previous_end = end
-
-                if is_pure_empty_shot(shot_text):
-                    empty_run += 1
-                    empty_total += 1
-                    if end - start > 1.5 + EPSILON:
-                        diagnostics.append(Diagnostic("ERROR", "纯空镜不得超过 1.5 秒。", block_number, shot_number))
-                    if empty_run >= 2:
-                        diagnostics.append(Diagnostic("ERROR", "不允许连续两个纯空镜。", block_number, shot_number))
+                start,end = float(interval.group('start')),float(interval.group('end'))
+                seconds=end-start
+                if end<=start or start<0 or end>target+EPSILON:
+                    diagnostics.append(Diagnostic('ERROR','时间区间无效或超出本块边界。',number,shot_number))
+                if previous_end is None and abs(start)>EPSILON:
+                    diagnostics.append(Diagnostic('ERROR','首镜必须从0秒开始。',number,shot_number))
+                elif previous_end is not None and abs(start-previous_end)>EPSILON:
+                    diagnostics.append(Diagnostic('ERROR','时间轴不连续。',number,shot_number))
+                previous_end=end
+                if is_pure_empty_shot(shot):
+                    empty_run+=1
+                    empty_total+=1
+                    if seconds>1.5+EPSILON:
+                        diagnostics.append(Diagnostic('ERROR','纯空镜不得超过1.5秒。',number,shot_number))
+                    if empty_run>=2:
+                        diagnostics.append(Diagnostic('ERROR','不允许连续两个纯空镜。',number,shot_number))
                 else:
-                    empty_run = 0
-            diagnostics.extend(shot_risk_warnings(shot_text, shot_seconds, block_number, shot_number))
-
-        if previous_end is not None and abs(previous_end - target) > EPSILON:
-            diagnostics.append(
-                Diagnostic("ERROR", f"末镜结束于 {previous_end:g} 秒，时间轴总长应为 {target:g} 秒。", block_number)
-            )
-        if abs(target - 15) <= EPSILON and empty_total > 1:
-            diagnostics.append(Diagnostic("ERROR", f"15 秒块通常最多一个纯空镜，当前为 {empty_total} 个。", block_number))
-
-        last_shot_number, last_shot = shots[-1]
-        if not TAIL_SILENT_SIGNAL.search(last_shot):
-            diagnostics.append(Diagnostic("ERROR", "末镜缺少 0.3-0.8 秒无对白/无台词尾帧提示。", block_number, last_shot_number))
-        elif not TAIL_SILENT_DURATION.search(last_shot):
-            diagnostics.append(Diagnostic("ERROR", "末镜写有无台词尾帧，但未标明 0.3-0.8 秒缓冲。", block_number, last_shot_number))
-
-    stripped_output = QUOTED_TEXT.sub(lambda match: re.sub(r"[^\n]", " ", match.group()), output)
-    if re.search(r"(?m)^\s*(?:入口状态|出口状态)\s*[：:]", stripped_output):
-        diagnostics.append(Diagnostic("WARN", "入口/出口状态应留在后台，必要起点并入首镜，不再单列前台字段。"))
-    if MISSING_CONTEXT.search(stripped_output):
-        diagnostics.append(Diagnostic("WARN", "提示词疑似依赖未给出的上一块上下文，请将必要起点改成当前可见事实。"))
-    for match in AMBIGUOUS_SPEAKER.finditer(stripped_output):
-        line = output.count("\n", 0, match.start()) + 1
-        diagnostics.append(Diagnostic("ERROR", f"第 {line} 行含模糊人物指代“{match.group(0)}”。请写明角色全名或身份。"))
+                    empty_run=0
+            diagnostics.extend(shot_risk_warnings(shot,seconds,number,shot_number))
+        if previous_end is not None and abs(previous_end-target)>EPSILON:
+            diagnostics.append(Diagnostic('ERROR',f'时间轴总长应为 {target:g} 秒。',number))
+        if target<=15 and empty_total>1:
+            diagnostics.append(Diagnostic('ERROR','15秒以内块通常最多一个纯空镜。',number))
+        buffer=tail_buffer(shots[-1][1])
+        if ending_mode(text)=='独立收束' and (buffer is None or not 0.3<=buffer<=0.8):
+            diagnostics.append(Diagnostic('ERROR','独立收束末镜须明确最后0.3-0.8秒无对白尾帧。',number,shots[-1][0]))
+        if buffer is not None and not 0.3<=buffer<=0.8:
+            diagnostics.append(Diagnostic('ERROR','声明的无对白缓冲须为0.3-0.8秒。',number))
+    stripped = remove_quoted_text(output)
+    if re.search(r'(?m)^\s*(?:入口状态|出口状态)[：:]',stripped):
+        diagnostics.append(Diagnostic('WARN','入口/出口状态应留在后台，必要起点并入首镜。'))
+    if MISSING_CONTEXT.search(stripped):
+        diagnostics.append(Diagnostic('WARN','提示词疑似依赖上一块上下文，请写成当前可见事实。'))
+    for match in AMBIGUOUS_SPEAKER.finditer(stripped):
+        diagnostics.append(Diagnostic('ERROR',f'含模糊人物指代“{match.group()}”，请写明全名或身份。'))
     return diagnostics
 
 
@@ -560,158 +559,179 @@ def validate_dialogue(source: str, output: str) -> list[Diagnostic]:
     expected, diagnostics = analyse_source_dialogue(source)
     complete_parse = not diagnostics
     if not expected:
-        diagnostics.append(Diagnostic("WARN", "源文本未识别到可靠的具名对白，跳过对白覆盖校验；不能据此断言无遗漏。"))
+        diagnostics.append(Diagnostic("WARN", "源文本未识别到可靠的具名对白，不能据此断言无遗漏；动作与画面文字须另核对。"))
         return diagnostics
-
-    source_speakers = {entry.speaker for entry in expected}
-    actual, unassigned = extract_output_dialogue(output, source_speakers)
-    streams: dict[str, str] = defaultdict(str)
-    for entry in actual:
-        streams[entry.speaker] += entry.text
+    actual, unassigned = extract_output_dialogue(output, {entry.speaker for entry in expected})
     if unassigned:
-        diagnostics.append(Diagnostic("WARN", f"台词字段中有 {unassigned} 段口播未可靠识别说话人或引号，覆盖不完整；仅展示文字不应放入台词字段。"))
-
+        diagnostics.append(Diagnostic("WARN", f"台词字段中有 {unassigned} 段未可靠解析，覆盖不完整；请按共同台词格式人工核对。"))
+    def turns(entries):
+        merged = []
+        for entry in entries:
+            if merged and merged[-1][0] == entry.speaker:
+                merged[-1] = (entry.speaker, merged[-1][1] + entry.text)
+            else:
+                merged.append((entry.speaker, entry.text))
+        return merged
     if complete_parse and not unassigned:
-        def turns(entries: list[Dialogue]) -> list[tuple[str, str]]:
-            result: list[tuple[str, str]] = []
-            for entry in entries:
-                if result and result[-1][0] == entry.speaker:
-                    result[-1] = (entry.speaker, result[-1][1] + entry.text)
-                else:
-                    result.append((entry.speaker, entry.text))
-            return result
         if turns(expected) != turns(actual):
             diagnostics.append(Diagnostic("ERROR", "已解析台词的顺序或合并全文不一致，可能存在遗漏、重复、新增、改写、错归属或跨说话人重排。"))
-    else:
-        # Unknown dialogue may legitimately occupy gaps. Match known chunks in
-        # order, consuming each once instead of counting overlapping substrings.
-        cursors: dict[str, int] = defaultdict(int)
-        for entry in expected:
-            position = streams[entry.speaker].find(entry.text, cursors[entry.speaker])
-            if position < 0:
-                diagnostics.append(Diagnostic("WARN", f"源文本第 {entry.line} 行暂解析的 {entry.speaker} 台词未匹配：{entry.text}；覆盖不完整，须人工核对。"))
-            else:
-                cursors[entry.speaker] = position + len(entry.text)
+        return diagnostics
+    # Unknown portions do not downgrade definite mismatches in known portions.
+    streams = defaultdict(str)
+    for entry in actual:
+        streams[entry.speaker] += entry.text
+    cursors = defaultdict(int)
+    for entry in expected:
+        pos = streams[entry.speaker].find(entry.text, cursors[entry.speaker])
+        if pos < 0:
+            level = 'ERROR' if entry.reliable and streams[entry.speaker] else 'WARN'
+            diagnostics.append(Diagnostic(level, f"源文本第 {entry.line} 行 {entry.speaker} 台词未匹配：{entry.text}；已知正文不一致，未解析部分仍须人工核对。"))
+        else:
+            cursors[entry.speaker] = pos + len(entry.text)
     return diagnostics
 
 
 def validate_voice_pacing(source: str, output: str, duration: float) -> list[Diagnostic]:
-    """Validate explicit cross-shot voice chains and short-drama pace bands."""
-    expected, _ = analyse_source_dialogue(source)
-    source_speakers = {entry.speaker for entry in expected}
-    diagnostics: list[Diagnostic] = []
-
-    for block_number, block_text in parse_blocks(output):
-        target = block_target_duration(block_text, duration)
-        chain_lines = list(VOICE_CHAIN_LINE.finditer(block_text))
-        declarations = list(VOICE_CHAIN.finditer(block_text))
-        if len(chain_lines) != len(declarations):
-            diagnostics.append(
-                Diagnostic(
-                    "ERROR",
-                    "“连续口播”格式不完整；必须写为“说话人｜起点-终点秒｜语速档｜跨镜连续，镜头切换不停顿，仅按原标点自然换气。”。",
-                    block_number,
-                )
-            )
-
-        runs: list[dict[str, object]] = []
-        for shot_number, shot_text in parse_shots(block_text):
-            entries, _ = extract_output_dialogue(shot_text, source_speakers)
-            for entry in entries:
-                if runs and runs[-1]["speaker"] == entry.speaker:
-                    runs[-1]["text"] = str(runs[-1]["text"]) + entry.text
-                    cast_shots = runs[-1]["shots"]
-                    assert isinstance(cast_shots, list)
-                    if shot_number not in cast_shots:
-                        cast_shots.append(shot_number)
+    expected,_ = analyse_source_dialogue(source)
+    speakers={entry.speaker for entry in expected}
+    diagnostics=[]
+    declaration_pattern=re.compile(r'^口播段[：:]\s*(?P<id>[A-Za-z][\w-]*)\s*[｜|]\s*(?P<speaker>[^｜|]+)\s*[｜|]\s*(?P<kind>对白|画外对白|OS|旁白)\s*[｜|]\s*(?P<start>\d+(?:\.\d+)?)-(?P<end>\d+(?:\.\d+)?)秒\s*[｜|]\s*(?P<profile>[^｜|]+)\s*[｜|]\s*停顿(?P<pause>\d+(?:\.\d+)?秒|待核)\s*[｜|]\s*(?P<concurrency>连续|重叠[：:]\S.*)$')
+    for block_number,block in parse_blocks(output):
+        target=block_target_duration(block,duration)
+        shot_rows=[]
+        all_entries=[]
+        for n,shot in parse_shots(block):
+            time_line=re.search(r'(?m)^\s*时间(?:区间)?[：:]\s*([^\n]+)',shot)
+            iv=INTERVAL.search(time_line.group(1)) if time_line else None
+            entries,_=extract_output_dialogue(shot,speakers)
+            bounds=(float(iv.group('start')),float(iv.group('end'))) if iv else None
+            row={'number':n,'bounds':bounds,'entries':entries}
+            shot_rows.append(row)
+            all_entries += [(entry,row) for entry in entries]
+        declarations=[]
+        seen=set()
+        for line in block.splitlines():
+            if not line.strip().startswith(('口播段：','口播段:')):
+                continue
+            match=declaration_pattern.fullmatch(line.strip())
+            if not match:
+                diagnostics.append(Diagnostic('ERROR','口播段格式不完整，须按ID、人物、类型、区间、语速档、停顿和连续/重叠依据填写。',block_number))
+                continue
+            d=match.groupdict()
+            if d['id'] in seen:
+                diagnostics.append(Diagnostic('ERROR','口播段ID重复。',block_number))
+                continue
+            seen.add(d['id'])
+            selected=[(e,r) for e,r in all_entries if e.chain_id==d['id']]
+            declarations.append({'id':d['id'],'speaker':canonical_speaker(d['speaker'],d['kind']),'start':float(d['start']),'end':float(d['end']),'profile':d['profile'].strip(),'pause':None if d['pause']=='待核' else float(d['pause'][:-1]),'overlap':d['concurrency'].startswith('重叠'),'selected':selected,'legacy':False})
+        for entry,row in all_entries:
+            if entry.chain_id and entry.chain_id not in seen:
+                diagnostics.append(Diagnostic('ERROR',f'台词话轮 {entry.chain_id} 缺少口播段声明。',block_number,row['number']))
+            if seen and not entry.chain_id:
+                diagnostics.append(Diagnostic('ERROR','使用口播段格式时，每段台词必须标话轮ID。',block_number,row['number']))
+        # Legacy compatibility: do not join same-person speech across silent shots.
+        runs=[]
+        for row in shot_rows:
+            for entry in row['entries']:
+                if entry.chain_id:
+                    continue
+                adjacent = runs and int(row['number'])-int(runs[-1]['selected'][-1][1]['number'])<=1
+                if adjacent and runs[-1]['speaker']==entry.speaker:
+                    runs[-1]['selected'].append((entry,row))
                 else:
-                    runs.append({"speaker": entry.speaker, "text": entry.text, "shots": [shot_number], "claimed": False})
-
-        queues: dict[str, list[dict[str, object]]] = defaultdict(list)
-        for run in runs:
-            queues[str(run["speaker"])].append(run)
-
-        for declaration in declarations:
-            speaker = canonical_speaker(declaration.group("speaker"))
-            start = float(declaration.group("start"))
-            end = float(declaration.group("end"))
-            profile = declaration.group("profile").strip()
-            if end <= start or start < 0 or end > target + EPSILON:
-                diagnostics.append(
-                    Diagnostic(
-                        "ERROR",
-                        f"连续口播区间 {start:g}-{end:g} 秒无效或超出本块 {target:g} 秒边界。",
-                        block_number,
-                    )
-                )
-            if profile not in VOICE_PROFILES:
-                diagnostics.append(
-                    Diagnostic(
-                        "ERROR",
-                        f"未知连续口播语速档“{profile}”；只能使用短剧常速、短剧快节奏或情绪慢速。",
-                        block_number,
-                    )
-                )
-
-            matching = next((run for run in queues.get(speaker, []) if not run["claimed"]), None)
-            if matching is None:
-                diagnostics.append(
-                    Diagnostic(
-                        "ERROR",
-                        f"连续口播声明的说话人“{speaker}”没有可按顺序匹配的话轮。",
-                        block_number,
-                    )
-                )
+                    runs.append({'speaker':entry.speaker,'selected':[(entry,row)],'claimed':False})
+        legacy_lines=list(VOICE_CHAIN_LINE.finditer(block))
+        legacy_matches=list(VOICE_CHAIN.finditer(block))
+        if len(legacy_lines)!=len(legacy_matches):
+            diagnostics.append(Diagnostic('ERROR','“连续口播”格式不完整；新输出请使用口播段共同格式。',block_number))
+        for i,match in enumerate(legacy_matches):
+            key=canonical_speaker(match.group('speaker'))
+            run=next((r for r in runs if r['speaker']==key and not r['claimed']),None)
+            if run is None:
+                diagnostics.append(Diagnostic('ERROR',f'连续口播说话人“{key}”没有可匹配的话轮。',block_number))
                 continue
-            matching["claimed"] = True
-            if end <= start or profile not in VOICE_PROFILES:
-                continue
-            units = spoken_unit_count(str(matching["text"]))
-            rate = units / (end - start) if units else 0.0
-            minimum, maximum = VOICE_PROFILES[profile]
-            if rate < minimum - EPSILON or rate > maximum + EPSILON:
-                direction = "过慢" if rate < minimum else "过快"
-                diagnostics.append(
-                    Diagnostic(
-                        "ERROR",
-                        f"连续口播{direction}：约 {units} 个可发音单位分配 {end - start:g} 秒，约 {rate:.2f} 单位/秒；“{profile}”应为 {minimum:g}-{maximum:g} 单位/秒。",
-                        block_number,
-                    )
-                )
-
+            run['claimed']=True
+            declarations.append({'id':f'legacy-{i}','speaker':key,'start':float(match.group('start')),'end':float(match.group('end')),'profile':match.group('profile').strip(),'pause':None,'overlap':False,'selected':run['selected'],'legacy':True})
         for run in runs:
-            shots = run["shots"]
-            assert isinstance(shots, list)
-            if len(shots) >= 2 and not run["claimed"]:
-                diagnostics.append(
-                    Diagnostic(
-                        "ERROR",
-                        f"{run['speaker']} 的同一连续话轮跨镜头 {'、'.join(shots)}，但缺少“连续口播”约束；切镜可能制造额外停顿。",
-                        block_number,
-                    )
-                )
+            fragments=''.join(e.text for e,_ in run['selected'])
+            crosses=len({r['number'] for _,r in run['selected']})>=2
+            is_one_source_turn=any(e.speaker==run['speaker'] and fragments in e.text for e in expected)
+            if crosses and is_one_source_turn and not run['claimed']:
+                diagnostics.append(Diagnostic('ERROR',f'{run["speaker"]} 的同一话轮跨镜，缺少“连续口播”或口播段约束。',block_number))
+        for d in declarations:
+            start,end=d['start'],d['end']
+            selected=d['selected']
+            if not selected:
+                diagnostics.append(Diagnostic('ERROR',f'口播段 {d["id"]} 没有对应台词。',block_number))
+                continue
+            if any(e.speaker!=d['speaker'] for e,_ in selected):
+                diagnostics.append(Diagnostic('ERROR',f'口播段 {d["id"]} 与台词的人物或类型错归属。',block_number))
+            valid_time=end>start and start>=0 and end<=target+EPSILON
+            if not valid_time:
+                diagnostics.append(Diagnostic('ERROR','连续口播区间无效或超出本块边界。',block_number))
+            bounds=[r['bounds'] for _,r in selected if r['bounds']]
+            if bounds and (start<bounds[0][0]-EPSILON or start>=bounds[0][1]-EPSILON or end<=bounds[-1][0]+EPSILON or end>bounds[-1][1]+EPSILON or any(end<=a+EPSILON or start>=b-EPSILON for a,b in bounds)):
+                diagnostics.append(Diagnostic('ERROR',f'口播段 {d["id"]} 的声音时间与台词所在镜头不匹配。',block_number))
+            buffer=tail_buffer(block)
+            if buffer is not None and end>target-buffer+EPSILON:
+                diagnostics.append(Diagnostic('ERROR',f'口播段 {d["id"]} 占用了无对白尾帧。',block_number))
+            if d['profile'] not in VOICE_PROFILES:
+                diagnostics.append(Diagnostic('ERROR','未知连续口播语速档。',block_number))
+                continue
+            if not valid_time:
+                continue
+            words=''.join(e.text for e,_ in selected)
+            units=spoken_unit_count(words)
+            if d['pause'] is None:
+                if not d['legacy']:
+                    diagnostics.append(Diagnostic('WARN',f'口播段 {d["id"]} 停顿待核，仅作估时复核。',block_number))
+                # Legacy intervals have no declared pause budget: only risk hints.
+                elif units/(end-start)<VOICE_PROFILES[d['profile']][0]:
+                    diagnostics.append(Diagnostic('WARN',f'连续口播估时偏慢：约 {units} 个可发音单位；旧格式未分离停顿，请人工复核或迁移口播段。',block_number))
+                continue
+            voiced=end-start-d['pause']
+            if voiced<=0 or d['pause']<0:
+                diagnostics.append(Diagnostic('ERROR','停顿不能占满口播区间，净发音时间必须为正。',block_number))
+                continue
+            rate=units/voiced
+            uncertain=bool(re.search(r'[^\u3400-\u4dbf\u4e00-\u9fff\s，。！？、；：…“”「」『』,.!?;:\-—]',words))
+            lo,hi=VOICE_PROFILES[d['profile']]
+            if uncertain:
+                diagnostics.append(Diagnostic('WARN',f'口播段 {d["id"]} 含数字、外语或不确定发音，请按实际读法复核语速。',block_number))
+            elif rate<lo-EPSILON or rate>hi+EPSILON:
+                diagnostics.append(Diagnostic('ERROR',f'连续口播净发音语速不符：约{units}单位/{voiced:g}秒={rate:.2f}，{d["profile"]}应为{lo:g}-{hi:g}。',block_number))
+            if rate>5.2 and voiced>3:
+                diagnostics.append(Diagnostic('WARN','高于5.2单位/秒的连续净发音超过3秒，请复核表演依据。',block_number))
+        # Compare dialogue order, independent of declaration order.
+        rank={d['id']:min((all_entries.index(pair) for pair in d['selected']),default=len(all_entries)) for d in declarations}
+        ordered=sorted(declarations,key=lambda d:rank[d['id']])
+        for i,current in enumerate(ordered):
+            for previous in ordered[:i]:
+                overlaps=max(previous['start'],current['start'])<min(previous['end'],current['end'])-EPSILON
+                if overlaps and not (previous['overlap'] and current['overlap']):
+                    diagnostics.append(Diagnostic('ERROR','话轮时间重叠；只有来源明确并发且双方声明重叠依据才允许。',block_number))
+            if i and current['start']<ordered[i-1]['start']-EPSILON and not (current['overlap'] and ordered[i-1]['overlap']):
+                diagnostics.append(Diagnostic('ERROR','声音话轮时间与原文发言顺序相反。',block_number))
     return diagnostics
 
 
-def validate(source: str, output: str, duration: float) -> list[Diagnostic]:
-    diagnostics: list[Diagnostic] = []
-    marker = re.search(r"(?m)^本次未使用文案[：:]", output)
+def validate(source: str, output: str, duration: float, min_duration: float = 4.0, model: Optional[str] = None, duration_step: Optional[float] = None, allow_deferred: bool = False) -> list[Diagnostic]:
+    diagnostics=[]
+    marker=re.search(r'(?m)^本次未使用文案[：:]',output)
     if marker:
-        notice = re.fullmatch(
-            r"本次未使用文案：\r?\n(?P<raw>.+?)\r?\n（“(?P=raw)”不足4s，本次未使用，请合并到下一次的分段文案中）\s*",
-            output[marker.start():], re.DOTALL,
-        )
-        generated = output[:marker.start()]
-        if notice and source.rstrip().endswith(notice.group("raw")):
-            raw = notice.group("raw")
-            source = source.rstrip()[:-len(raw)]
-            diagnostics.append(Diagnostic("WARN", "尾部原文及规定提示已核对并排除本次覆盖；自然时长是否确实不足 4 秒仍须人工复核。"))
+        if not allow_deferred:
+            diagnostics.append(Diagnostic('ERROR','默认优先完整收尾；暂存未完稿须用户明确同意并使用 --allow-deferred。'))
+        notice=re.fullmatch(r'本次未使用文案：\r?\n(?P<raw>.+?)\r?\n（“(?P=raw)”不足4s，本次未使用，请合并到下一次的分段文案中）\s*',output[marker.start():],re.DOTALL)
+        generated=output[:marker.start()]
+        if allow_deferred and notice and source.rstrip().endswith(notice.group('raw')):
+            source=source.rstrip()[:-len(notice.group('raw'))]
+            diagnostics.append(Diagnostic('WARN','暂存尾部已逐字核对；不足 4 秒仍须人工复核，且不计为已完成。'))
             if not generated.strip() and not source.strip():
                 return diagnostics
-        else:
-            diagnostics.append(Diagnostic("ERROR", "未使用文案或提示格式不匹配，或不是源文本的逐字尾部；不能从覆盖检查排除。"))
-        output = generated
-    return diagnostics + validate_structure(output, duration) + validate_dialogue(source, output) + validate_voice_pacing(source, output, duration)
+        elif not notice or not source.rstrip().endswith(notice.group('raw')):
+            diagnostics.append(Diagnostic('ERROR','未使用文案不是源文本逐字尾部或格式不匹配，不能从覆盖检查排除。'))
+        output=generated
+    return diagnostics+validate_structure(output,duration,min_duration,model,duration_step)+validate_dialogue(source,output)+validate_voice_pacing(source,output,duration)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -720,8 +740,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     parser.add_argument("--source", required=True, type=Path, help="原始剧本文本路径")
     parser.add_argument("--output", required=True, type=Path, help="生成块提示词文本路径")
-    parser.add_argument("--duration", type=float, default=15.0, help="常规生成块目标时长，默认 15 秒；15 秒模式允许最后一块为 4-15 秒")
+    parser.add_argument("--duration", type=float, default=15.0, help="常规生成块目标时长，默认 15 秒；最后两块可按实际时长联合收尾")
+    parser.add_argument("--model", choices=["2.0", "2.5"], help="实际模型；未知时不假填")
+    parser.add_argument("--min-duration", type=float, default=4.0, help="入口最小时长；默认4为工作流规划下限")
+    parser.add_argument("--duration-step", type=float, help="已核实入口的时长步长")
+    parser.add_argument("--allow-deferred", action="store_true", help="仅用户明确同意暂存未完稿时启用")
     args = parser.parse_args(argv)
+    if args.min_duration <= 0 or (args.duration_step is not None and args.duration_step <= 0):
+        parser.error("最小时长和步长必须为正")
 
     if args.duration <= 0:
         parser.error("--duration 必须大于 0")
@@ -731,7 +757,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     source = args.source.read_text(encoding="utf-8")
     output = args.output.read_text(encoding="utf-8")
-    diagnostics = validate(source, output, args.duration)
+    diagnostics = validate(source, output, args.duration, args.min_duration, args.model, args.duration_step, args.allow_deferred)
     for diagnostic in diagnostics:
         print(diagnostic.render())
     errors = sum(diagnostic.level == "ERROR" for diagnostic in diagnostics)
@@ -742,4 +768,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
 
 if __name__ == "__main__":
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8')
     raise SystemExit(main())
