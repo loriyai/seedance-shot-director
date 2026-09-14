@@ -20,7 +20,7 @@ python -B scripts/compile_plan.py context --project <项目目录> --segment seg
 python -B scripts/compile_plan.py compile --project <项目目录> --segment seg001 --plan <plan.json>
 ```
 
-返回可直接交付的 `prompt.txt`、包含原规划的 `ledger.json`、诊断与候选摘要。候选尚未语义复核时不会标为通过。编译已运行一次现有对白/结构校验器，不重复调用它检查同一稿。
+编译时从同一规划生成后台校验视图和直投正文，后台字段不泄漏到正文；另核对两者声音身份与原文一致。返回可直接交付的 `prompt.txt`、包含原规划的 `ledger.json`、诊断与候选摘要。候选尚未语义复核时不会标为通过。编译已运行一次现有对白/结构校验器，不重复调用它检查同一稿。
 
 4. 对候选做一次 [qc-fallback.md](qc-fallback.md) 要求的语义复核。写一份短复核记录：
 
@@ -44,15 +44,15 @@ python -B scripts/compile_plan.py finalize --project <项目目录> --segment se
 
 ## 规划字段
 
-根对象必须有 `schema_version=1`、`source_version`、`source_sha256`、`config_sha256`、`defaults`、`beats`、`blocks`。未知字段会报错，避免把应该执行的内容静默漏掉。
+根对象必须有 `schema_version=2`（旧规划1仍可读取）、`source_version`、`source_sha256`、`config_sha256`、`defaults`、`beats`、`blocks`。未知字段会报错，避免把应该执行的内容静默漏掉。
 
-- `defaults`：`style`、`characters`、`scene`、`atmosphere`、`sound` 五个非空中文单行字段；实际提供素材时加 `assets`。它们是本次规划共享的稳定事实，脚本在每块完整展开；某块有不同人物/场景/状态时用 `header` 覆盖对应字段，不让全局默认误带入新场景。声音方案须与配置一致。
+- `defaults`：`style`、`characters`、`scene`、`atmosphere`、`sound` 五个非空中文单行字段；实际提供素材时加 `assets`。它们是本次规划共享的稳定事实，脚本在每块完整展开；某块有不同人物/场景/状态时用 `header` 覆盖对应字段，不让全局默认误带入新场景。sound只记录实际配乐选择，例如“无背景配乐”，不罗列全局环境声/对白/系统声音。characters只列姓名、必要阶段与实际素材绑定。
 - `beats`：每项含唯一 `id`、原文中可定位的精确 `evidence` 摘句；可加 `timing: "parallel" / "serial"`，串行动作必须有 `basis` 记录依据。摘句和映射不能自动证明剧情覆盖，遗漏和重演仍须语义复核。无关的时序字段不强填。
-- `blocks`：按顺序编号；每项含 `duration`、`entry`、`exit`、`voices`、`shots`。`entry`/`exit` 是当前块状态，真正需要执行的起点必须同时写入首镜动作；它们不自动生成新动作。可选 `header`、`ending`、`silent_tail`、`notes`。
-- `ending`：`独立收束` / `连续剪辑` / `剧情硬切`。省略时按制作配置决定，连续交付的非最终块连续剪辑，最终块独立收束。独立收束的 `silent_tail` 默认0.5秒，范围0.3–0.8；另外两种收尾不填此字段。明确的剧情硬切仍优先。
-- `voices`：无口播时空列表。每个话轮只录入一次 `id`、`speaker`、`kind`（对白/OS/旁白）、逐字 `text`、`start`、`end`、`pause`、`profile`；`pause=null` 表示待核，`profile` 使用现有语速档。原文明确并发才加 `overlap` 依据。同人隔动作再次开口另建ID；不能为了少填字段合并话轮。
-- `shots`：每镜含 `start`、`end`、所覆盖节拍ID列表 `beats`、`action`、`camera`。可选 `speech`、`performance`、`sound`、`screen_text`、`transition`、`notes`。执行描述保持中文单行，镜头ID由程序编号；时轴与五镜规则由原校验器检查。
-- `speech`：`[{"voice": "V1"}]` 表示整句只在该镜出现；跨镜时用 `{"voice":"V1","span":[0,4]}`。范围是话轮 `text` 的零基Unicode字符位置，前含后不含，包含原标点；用程序定位切分点，不靠目测计算。各片段按原序完整覆盖，不重复录入台词正文。编译器拒绝遗漏、重叠、倒序和越界。
+- `blocks`：按顺序编号；每项含 `duration`、`entry`、`exit`、`voices`、`shots`。`entry`/`exit` 是当前块状态，真正需要执行的起点必须同时写入首镜动作；它们不自动生成新动作。新规划还必须有非空 `scene_id`，连续时空同ID，地点或时间段改变用新ID；可选 `header`、`ending`、`silent_head`、`silent_tail`、`notes`。
+- `ending`：`独立收束` / `连续剪辑` / `剧情硬切`。省略时按制作配置决定，连续交付的非最终块连续剪辑，最终块独立收束。这些模式只在后台。一般独立收束 silent_tail 默认0.5秒；相邻 scene_id 改变自动为前尾、后首取至少1秒（可用 silent_head/silent_tail 增大）。留白必须在首末镜内，不占用口播，画面保持自然动态。源码黑屏等要求与留白共同规划。
+- `voices`：无口播时空列表。每个话轮只录入一次 `id`、`speaker`、`kind`（对白/OS/旁白）、逐字 `text`、`start`、`end`、`pause`、`profile`；`pause=null` 表示待核，`profile` 使用现有语速档。可选 `tone` 是直接接在姓名后的自然语言语气，例如“压低声音”“以激昂的语气”；普通话轮省略。原文明确并发才加 `overlap` 依据。同人隔动作再次开口另建ID；不能为了少填字段合并话轮。
+- `shots`：每镜含 `start`、`end`、所覆盖节拍ID列表 `beats`、`action`、`camera`。新规划每镜必须有非空 `effects` 字符串列表，分别列本镜环境声与动作声，编译为台词下方的“环境音效：”并用“；”分隔。可选 `speech`、`performance`、`screen_text`、`transition`、`notes`；sound只兼容旧规划。执行描述保持中文单行；15秒默认五镜，偏离只提醒导演复核。
+- `speech`：`[{"voice": "V1"}]` 表示整句只在该镜出现；跨镜时用 `{"voice":"V1","span":[0,4]}`。范围是话轮 `text` 的零基Unicode字符位置，前含后不含，包含原标点；用程序定位切分点，不靠目测计算。各片段按原序完整覆盖，不重复录入台词正文。编译器拒绝遗漏、重叠、倒序和越界。片段可选 start/end/pause，省略时使用话轮与镜头交集及按发音单位比例分配的停顿。实际起止与停顿必须可执行，片段连续覆盖整句，停顿之和等于话轮预算。逐镜净容量单独硬检，不能用整句平均语速掩盖某镜过密。
 - `notes`：仅存实际需要的来源依据、观众/人物知情差异、可见性或导演复核说明，可用紧凑对象；不默认填一套空字段。必须执行的动作、声音、画面文字不能只写在 `notes` 中。
 
 人物、场景、关键道具与动作真实性不是排版工具能判断的；未知事实继续按来源门禁处理。计划字段中的数字与英文键只是后台制作格式，生成给 Seedance 的指令仍是中文。

@@ -53,8 +53,10 @@ class ValidatorTests(unittest.TestCase):
     def test_full_fifteen_has_five_continuous_shots(self):
         self.assertEqual(validator.validate_structure(block(), 15), [])
 
-    def test_fifteen_four_shots_fails(self):
-        self.assertHas(validator.validate_structure(block(count=4), 15), "5 个镜头", "ERROR")
+    def test_fifteen_four_shots_requests_director_review(self):
+        result = validator.validate_structure(block(count=4), 15)
+        self.assertNoErrors(result)
+        self.assertHas(result, "默认五镜", "WARN")
 
     def test_only_last_two_blocks_may_be_short(self):
         self.assertNoErrors(validator.validate_structure(block() + "\n" + block(8, 3, 2), 15))

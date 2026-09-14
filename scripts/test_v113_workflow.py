@@ -153,11 +153,11 @@ class WorkflowTests(unittest.TestCase):
         first['shots'].pop(1)
         for index, shot in enumerate(first['shots']):
             shot['start'], shot['end'] = index * 3, (index + 1) * 3 if index < 3 else 13
-        plan['blocks'].append({'duration': 4, 'entry': first['exit'], 'exit': '沈遥站在门外，林舟在旁。',
+        plan['blocks'].append({'duration': 4, 'scene_id': first['scene_id'], 'entry': first['exit'], 'exit': '沈遥站在门外，林舟在旁。',
             'header': {'scene': '院门外道路，院门在人物身后', 'atmosphere': '日光平稳，沈遥在林舟右侧'},
             'voices': [second_voice], 'shots': [{'start': 0, 'end': 4, 'beats': ['E3'],
                 'action': '沈遥停在院门外，朝身旁林舟说话。', 'camera': '双人中景，门外侧面平视，固定机位。',
-                'speech': [{'voice': 'V2'}]}]})
+                'speech': [{'voice': 'V2'}], 'effects': ['两人停步的脚步声']} ]})
         result = c.compile_project(self.project, 'seg001', plan)
         self.assertEqual(result['diagnostics'], [])
         prompt = Path(result['prompt']).read_text(encoding='utf-8')

@@ -11,7 +11,8 @@ from pathlib import Path
 import sys
 
 from project_state import ProjectState, digest
-from validate_dialogue_and_timeline import validate, VOICE_PROFILES
+from validate_dialogue_and_timeline import (validate, VOICE_PROFILES, Diagnostic,
+    spoken_unit_count, extract_output_dialogue, canonical_speaker)
 
 
 def canonical(data):
@@ -39,9 +40,29 @@ def number(value):
     return f'{value:g}'
 
 
-def render(plan, source, config):
+def fragment_timing(voice, shot, fragment):
+    start = fragment.get('start', max(voice['start'], shot['start']))
+    end = fragment.get('end', min(voice['end'], shot['end']))
+    span = fragment.get('span', [0, len(voice['text'])])
+    units = spoken_unit_count(voice['text'][span[0]:span[1]])
+    total = spoken_unit_count(voice['text'])
+    pause = fragment.get('pause', None if voice['pause'] is None else voice['pause'] * units / max(total, 1))
+    return start, end, pause
+
+
+def block_handles(plan, index, config):
+    block = plan['blocks'][index]
+    changed_before = index > 0 and block.get('scene_id') != plan['blocks'][index-1].get('scene_id')
+    changed_after = index + 1 < len(plan['blocks']) and block.get('scene_id') != plan['blocks'][index+1].get('scene_id')
+    ending = block.get('ending', '连续剪辑' if config.get('delivery') == 'continuous' and index+1 < len(plan['blocks']) else '独立收束')
+    head = max(block.get('silent_head', 0), 1 if changed_before else 0)
+    tail = max(block.get('silent_tail', 0.5 if ending == '独立收束' else 0), 1 if changed_after else 0)
+    return head, tail, ending
+
+
+def render(plan, source, config, *, audit=False):
     keys(plan, ('schema_version', 'source_version', 'source_sha256', 'config_sha256', 'defaults', 'beats', 'blocks'))
-    if plan['schema_version'] != 1:
+    if plan['schema_version'] not in (1, 2):
         raise ValueError('不支持的规划版本。')
     headers = ('style', 'characters', 'scene', 'atmosphere', 'sound')
     keys(plan['defaults'], headers, ('assets',))
@@ -64,28 +85,38 @@ def render(plan, source, config):
         raise ValueError('规划需要生成块。')
     output, used_beats = [], set()
     for block_index, block in enumerate(plan['blocks'], 1):
-        keys(block, ('duration', 'entry', 'exit', 'voices', 'shots'), ('header', 'ending', 'silent_tail', 'notes'))
+        keys(block, ('duration', 'entry', 'exit', 'voices', 'shots'), ('header', 'ending', 'silent_tail', 'silent_head', 'scene_id', 'notes'))
+        if plan['schema_version'] == 2:
+            line(block.get('scene_id'))
         line(block['entry'])
         line(block['exit'])
         header = {**plan['defaults'], **block.get('header', {})}
         keys(header, headers, ('assets',))
         for value in header.values():
             line(value)
-        ending = block.get('ending', '连续剪辑' if config.get('delivery') == 'continuous' and block_index < len(plan['blocks']) else '独立收束')
+        head, tail, ending = block_handles(plan, block_index-1, config)
+        for handle in (head, tail):
+            number(handle)
+            if handle < 0:
+                raise ValueError('无口播衔接时段不能为负。')
+        if head + tail >= block['duration']:
+            raise ValueError('首尾衔接时段不能占满生成块。')
         if ending not in ('独立收束', '连续剪辑', '剧情硬切'):
             raise ValueError('无效收尾方式。')
         aspect = line(config.get('aspect_ratio', '16:9'))
         lines = [f'生成块 {block_index:02d}｜{number(block["duration"])}秒｜{aspect}',
                  header['style'] + '；' + header['sound'],
                  '人物：' + header['characters'], '场景：' + header['scene'],
-                 '本块氛围与站位：' + header['atmosphere'], '收尾方式：' + ending]
+                 '本块氛围与站位：' + header['atmosphere']]
+        if audit:
+            lines.append('收尾方式：' + ending)
         if 'assets' in header:
             lines.append('素材绑定：' + header['assets'])
         if not isinstance(block['voices'], list) or not isinstance(block['shots'], list):
             raise ValueError('声音和镜头必须为列表。')
         voices, consumed = {}, {}
         for voice in block['voices']:
-            keys(voice, ('id', 'speaker', 'kind', 'text', 'start', 'end', 'pause', 'profile'), ('overlap',))
+            keys(voice, ('id', 'speaker', 'kind', 'text', 'start', 'end', 'pause', 'profile'), ('overlap', 'tone'))
             identifier = line(voice['id'])
             if identifier in voices or any(c in identifier for c in '|｜'):
                 raise ValueError('话轮ID重复或包含分隔符。')
@@ -97,22 +128,27 @@ def render(plan, source, config):
             line(voice['text'])
             pause = '待核' if voice['pause'] is None else number(voice['pause']) + '秒'
             overlap = '重叠：' + line(voice['overlap']) if 'overlap' in voice else '连续'
-            lines.append(f'口播段：{identifier}｜{speaker}｜{voice["kind"]}｜{number(voice["start"])}-{number(voice["end"])}秒｜{voice["profile"]}｜停顿{pause}｜{overlap}')
+            if 'tone' in voice:
+                line(voice['tone'])
+            if audit:
+                lines.append(f'口播段：{identifier}｜{speaker}｜{voice["kind"]}｜{number(voice["start"])}-{number(voice["end"])}秒｜{voice["profile"]}｜停顿{pause}｜{overlap}')
             voices[identifier], consumed[identifier] = voice, 0
         for shot_index, shot in enumerate(block['shots'], 1):
-            keys(shot, ('start', 'end', 'beats', 'action', 'camera'), ('speech', 'performance', 'sound', 'screen_text', 'transition', 'notes'))
+            keys(shot, ('start', 'end', 'beats', 'action', 'camera'), ('speech', 'performance', 'sound', 'effects', 'screen_text', 'transition', 'notes'))
+            if plan['schema_version'] == 2 and (not isinstance(shot.get('effects'), list) or not shot['effects']):
+                raise ValueError('每镜需要非空effects列表，逐项列出场景环境声与动作声；确无声音则明确静默。')
             if not isinstance(shot['beats'], list) or not shot['beats'] or any(b not in beats for b in shot['beats']):
                 raise ValueError('镜头必须映射到已登记来源节拍。')
             used_beats.update(shot['beats'])
             lines += ['', f'[镜头{shot_index}]', f'时间区间：{number(shot["start"])}-{number(shot["end"])}秒。',
                       '画面与动作：' + line(shot['action']), '摄影机与构图：' + line(shot['camera'])]
-            for field, label in (('performance', '表演'), ('sound', '光线与声音'), ('screen_text', '画面文字'), ('transition', '衔接')):
+            for field, label in (('performance', '表演'), ('screen_text', '画面文字'), ('transition', '衔接')):
                 if field in shot:
                     lines.append(label + '：' + line(shot[field]))
             if not isinstance(shot.get('speech', []), list):
                 raise ValueError('镜头台词必须为列表。')
             for fragment in shot.get('speech', []):
-                keys(fragment, ('voice',), ('span',))
+                keys(fragment, ('voice',), ('span', 'start', 'end', 'pause'))
                 identifier = fragment['voice']
                 if identifier not in voices:
                     raise ValueError('镜头引用了未声明话轮。')
@@ -123,22 +159,73 @@ def render(plan, source, config):
                 start, end = span
                 if start != consumed[identifier] or not start < end <= len(voice['text']):
                     raise ValueError('话轮片段遗漏、重复、倒序或越界。')
-                lines.append(f'台词：{identifier}｜{voice["speaker"]}｜{voice["kind"]}：“{voice["text"][start:end]}”')
+                if audit:
+                    lines.append(f'台词：{identifier}｜{voice["speaker"]}｜{voice["kind"]}：“{voice["text"][start:end]}”')
+                else:
+                    begin, finish, _ = fragment_timing(voice, shot, fragment)
+                    verb = {'对白': '说', 'OS': '内心OS', '旁白': '旁白'}[voice['kind']]
+                    delivery = voice['speaker'] + voice.get('tone', '') + verb
+                    continuation = '接续本块前镜话语，语气连续' if start else '开始发声'
+                    lines.append(f'声音安排：{number(begin)}-{number(finish)}秒，{continuation}；{number(finish)}秒结束本镜这部分口播。')
+                    lines.append(f'台词：{delivery}：“{voice["text"][start:end]}”')
                 consumed[identifier] = end
+            if not audit:
+                effects = shot.get('effects', [shot.get('sound', '无明确环境音效')])
+                lines.append('环境音效：' + '；'.join(line(effect).rstrip('；。') for effect in effects) + '。')
+                if shot_index == 1 and head:
+                    lines.append(f'声音安排：0-{number(head)}秒无口播，画面自然延续当前动作或状态，环境与动作声持续。')
+                if shot_index == len(block['shots']) and tail:
+                    lines.append(f'声音安排：{number(block["duration"]-tail)}-{number(block["duration"])}秒无口播，画面延续本镜动作或自然状态，不定格；环境与动作声持续。')
         if any(consumed[v] != len(voices[v]['text']) for v in voices):
             raise ValueError('声明的话轮未完整分配到镜头。')
-        if ending == '独立收束':
-            tail = block.get('silent_tail', 0.5)
-            number(tail)
-            if not 0.3 <= tail <= 0.8:
-                raise ValueError('独立收束静音尾部必须为0.3–0.8秒。')
+        if audit and tail:
             lines.append(f'无对白尾帧：最后{tail:g}秒无对白，' + block['exit'])
-        elif 'silent_tail' in block:
-            raise ValueError('连续剪辑或剧情硬切不应同时设置独立静音尾部。')
         output.append('\n'.join(lines))
     if beats != used_beats:
         raise ValueError('存在未映射到镜头的来源节拍。')
     return '\n\n'.join(output) + '\n'
+
+
+def validate_plan_timing(plan, config):
+    diagnostics = []
+    for index, block in enumerate(plan['blocks']):
+        label = f'{index+1:02d}'
+        head, tail, _ = block_handles(plan, index, config)
+        voices = {v['id']: v for v in block['voices']}
+        segments = {key: [] for key in voices}
+        if block['shots'] and (head > block['shots'][0]['end'] or tail > block['duration']-block['shots'][-1]['start']):
+            diagnostics.append(Diagnostic('ERROR', '首尾无口播衔接时段必须容纳在首镜和末镜内。', label))
+        for voice in voices.values():
+            if voice['start'] < head-1e-6 or voice['end'] > block['duration']-tail+1e-6:
+                diagnostics.append(Diagnostic('ERROR', '口播占用跨场景或收束的无口播时段。', label))
+        for shot_index, shot in enumerate(block['shots'], 1):
+            for fragment in shot.get('speech', []):
+                voice = voices[fragment['voice']]
+                start, end, pause = fragment_timing(voice, shot, fragment)
+                for value in (start, end):
+                    number(value)
+                span = fragment.get('span', [0, len(voice['text'])])
+                words = voice['text'][span[0]:span[1]]
+                segments[voice['id']].append((start, end, pause))
+                if start < max(shot['start'], voice['start'])-1e-6 or end > min(shot['end'], voice['end'])+1e-6 or end <= start:
+                    diagnostics.append(Diagnostic('ERROR', '台词片段的实际声音区间超出对应镜头或话轮。', label, str(shot_index)))
+                    continue
+                if pause is None:
+                    diagnostics.append(Diagnostic('WARN', '台词片段停顿待核，需人工核对局部容量。', label, str(shot_index)))
+                    continue
+                number(pause)
+                net = end-start-pause
+                units = spoken_unit_count(words)
+                hi = VOICE_PROFILES[voice['profile']][1]
+                if pause < 0 or net <= 0 or units / net > hi+1e-6:
+                    diagnostics.append(Diagnostic('ERROR', f'台词片段容量不足：{units}个发音单位，净时间{net:g}秒；须重分片段或调整镜头边界。', label, str(shot_index)))
+        for identifier, rows in segments.items():
+            voice = voices[identifier]
+            if rows and (abs(rows[0][0]-voice['start']) > 1e-6 or abs(rows[-1][1]-voice['end']) > 1e-6 or any(abs(a[1]-b[0]) > 1e-6 for a,b in zip(rows, rows[1:]))):
+                diagnostics.append(Diagnostic('ERROR', '同一话轮片段须连续覆盖声音区间；切镜不制造空隙。', label))
+            if voice['pause'] is not None and all(row[2] is not None for row in rows) and abs(sum(row[2] for row in rows)-voice['pause']) > 1e-6:
+                diagnostics.append(Diagnostic('ERROR', '台词片段停顿总量与后台话轮预算不一致。', label))
+    return diagnostics
 
 
 def fingerprint():
@@ -158,7 +245,14 @@ def compile_project(project, segment, plan):
     source = Path(source_record['path']).read_bytes().decode('utf-8')
     prompt = render(plan, source, config)
     duration = config.get('max_duration', min(config.get('target_duration', 15), 15 if config.get('model') == '2.0' else 30))
-    diagnostics = validate(source, prompt, duration, config.get('min_duration', 4), config.get('model'), config.get('duration_step'))
+    audit_prompt = render(plan, source, config, audit=True)
+    diagnostics = validate(source, audit_prompt, duration, config.get('min_duration', 4), config.get('model'), config.get('duration_step'))
+    diagnostics += validate_plan_timing(plan, config)
+    names = {canonical_speaker(v['speaker'], v['kind']) for b in plan['blocks'] for v in b['voices']}
+    actual, unassigned = extract_output_dialogue(prompt, names)
+    expected, _ = extract_output_dialogue(audit_prompt, names)
+    if unassigned or [(x.speaker, x.text) for x in actual] != [(x.speaker, x.text) for x in expected]:
+        diagnostics.append(Diagnostic('ERROR', '直投正文的自然语言台词与后台话轮身份或正文不一致。'))
     checks = [asdict(d) for d in diagnostics]
     plan_hash, prompt_hash = digest(canonical(plan)), digest(prompt)
     build_hash = digest(canonical({'plan': plan_hash, 'compiler': fingerprint()}))

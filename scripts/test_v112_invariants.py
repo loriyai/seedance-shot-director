@@ -127,7 +127,7 @@ class BlockContractTests(unittest.TestCase):
     def test_tail_rebalance_and_thirty_remainder(self):
         self.assertEqual(self.errors(v.validate_structure(block(13,4)+'\n'+block(4,1,2),15)),[])
         self.assertEqual(self.errors(v.validate_structure(block(30,10)+'\n'+block(8,3,2),30)),[])
-        self.assertTrue(self.errors(v.validate_structure(block(15,4),15)))
+        self.assertEqual(self.errors(v.validate_structure(block(15,4),15)), [])
 
     def test_minimum_step_and_thirty_advisory(self):
         self.assertTrue(self.errors(v.validate_structure(block(4,1),15,min_duration=5)))
