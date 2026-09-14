@@ -121,6 +121,8 @@ class ProjectState:
         segment['baseline'] = version
         segment['source'] = None
         segment['ledger_status'] = 'stale'
+        if 'story_index' in segment:
+            segment['index_status'] = 'stale'
         return version
 
     def revise(self, identifier, text, reason):
@@ -176,6 +178,92 @@ class ProjectState:
             self.commit(state)
             return version
 
+    def review_context(self, identifier):
+        segment = self.require_segment(self.read(), identifier)
+        version = segment['review']
+        if not version:
+            raise ValueError('没有当前审阅稿。')
+        record = segment['versions'][version]
+        if record.get('baseline_at_review', record['baseline']) != segment['baseline']:
+            raise ValueError('审阅稿基线已变化，请重新审阅。')
+        return {'version': version, 'sha256': record['sha256'], 'path': str(self.path(record['path'])), 'baseline': record['baseline']}
+
+    def review_patch(self, identifier, patch):
+        """Apply unique exact replacements to an immutable, hash-checked full review."""
+        if not isinstance(patch, dict) or set(patch) != {'review_version', 'review_sha256', 'edits'}:
+            raise ValueError('局部修改仅接受review_version、review_sha256与edits。')
+        with self.transaction():
+            state = self.read()
+            segment = self.require_segment(state, identifier)
+            current = segment['review']
+            if not current or patch.get('review_version') != current:
+                raise ValueError('局部修改必须基于当前审阅版本。')
+            record = segment['versions'][current]
+            if patch.get('review_sha256') != record['sha256']:
+                raise ValueError('局部修改的审阅摘要不匹配。')
+            if record.get('baseline_at_review', record['baseline']) != segment['baseline']:
+                raise ValueError('审阅稿基线已变化，请重新审阅。')
+            original = self.verified_text(record)
+            edits = patch.get('edits')
+            if not isinstance(edits, list) or not edits:
+                raise ValueError('局部修改需要非空edits列表。')
+            replacements = []
+            for edit in edits:
+                if not isinstance(edit, dict) or set(edit) != {'old', 'new'}:
+                    raise ValueError('每项替换只能包含old与new。')
+                old, new = edit['old'], edit['new']
+                if not isinstance(old, str) or not old or not isinstance(new, str):
+                    raise ValueError('old需为非空原文，new需为文本。')
+                matches = [m.start() for m in re.finditer('(?=' + re.escape(old) + ')', original)]
+                if len(matches) != 1:
+                    raise ValueError('原文片段未找到或不唯一，请扩大原文上下文。')
+                replacements.append((matches[0], matches[0] + len(old), new))
+            replacements.sort()
+            if any(left[1] > right[0] for left, right in zip(replacements, replacements[1:])):
+                raise ValueError('替换范围重叠，请合并为一次修改。')
+            revised = original
+            for start, end, new in reversed(replacements):
+                revised = revised[:start] + new + revised[end:]
+            version = current
+            if revised != original:
+                number = max(int(v[1:]) for v in segment['versions'] if re.fullmatch(r'R\d+', v)) + 1
+                version = f'R{number}'
+                record = self.save_version(identifier, segment, version, revised, kind='review',
+                                           baseline=record['baseline'], baseline_at_review=segment['baseline'], parent=current)
+                segment['review'], segment['source'], segment['ledger_status'] = version, None, 'stale'
+                self.commit(state)
+            return {'version': version, 'sha256': record['sha256'], 'path': str(self.path(record['path'])),
+                    'changed': revised != original}
+
+    def story_index(self, identifier, data):
+        """Record an analyst-created global index; never claim automatic semantic extraction."""
+        with self.transaction():
+            state = self.read()
+            segment = self.require_segment(state, identifier)
+            baseline = segment['baseline']
+            if data.get('source_version') != baseline or data.get('source_sha256') != segment['versions'][baseline]['sha256']:
+                raise ValueError('全剧索引不属于当前原版基线。')
+            required = ('characters', 'relationships', 'scenes', 'key_props', 'timeline', 'foreshadowing', 'unknowns')
+            if any(not isinstance(data.get(key), list) for key in required):
+                raise ValueError('全剧索引需包含人物、关系、场景、关键道具、时间线、伏笔与未知项列表。')
+            segment['story_index'], segment['index_status'] = data, 'recorded'
+            self.commit(state)
+            return {'index_status': 'recorded', 'source_version': baseline}
+
+    def candidate(self, identifier, build, receipt):
+        with self.transaction():
+            state = self.read()
+            segment = self.require_segment(state, identifier)
+            source = segment['source']
+            if not source or receipt['source_version'] != source or receipt['source_sha256'] != segment['versions'][source]['sha256']:
+                raise ValueError('编译期间来源已变化。')
+            encoded = json.dumps(state['config'], ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False)
+            if receipt['config_sha256'] != digest(encoded):
+                raise ValueError('编译期间配置已变化。')
+            segment.setdefault('candidates', {})[build] = receipt
+            segment['ledger_status'] = 'pending_review'
+            self.commit(state)
+
     def use_original(self, identifier, initial=False):
         with self.transaction():
             state = self.read()
@@ -229,6 +317,10 @@ class ProjectState:
                 raise ValueError('未锁定来源，不能登记分镜台账。')
             if data.get('source_version') != source or data.get('source_sha256') != segment['versions'][source]['sha256']:
                 raise ValueError('台账来源版本或摘要不匹配。')
+            if 'config_sha256' in data:
+                encoded = json.dumps(state['config'], ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False)
+                if data['config_sha256'] != digest(encoded):
+                    raise ValueError('台账配置摘要不匹配。')
             segment['ledger'] = data
             segment['ledger_status'] = 'recorded'
             self.commit(state)
@@ -238,7 +330,7 @@ class ProjectState:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--project', required=True, type=Path)
-    parser.add_argument('command', choices=['init','ingest','revise','review','confirm','use-original','source','config','ledger'])
+    parser.add_argument('command', choices=['init','ingest','revise','review','review-context','review-patch','story-index','confirm','use-original','source','config','ledger'])
     parser.add_argument('--id', default='story')
     parser.add_argument('--segment')
     parser.add_argument('--input', type=Path)
@@ -257,6 +349,8 @@ def main(argv=None):
                 raise ValueError('该操作需要 --segment。')
             if args.command == 'source':
                 result = store.source(args.segment)
+            elif args.command == 'review-context':
+                result = store.review_context(args.segment)
             elif args.command == 'use-original':
                 result = store.use_original(args.segment, args.initial)
             else:
@@ -266,6 +360,8 @@ def main(argv=None):
                 if args.command == 'ingest': result = store.ingest(args.segment, text)
                 elif args.command == 'revise': result = store.revise(args.segment, text, args.reason)
                 elif args.command == 'review': result = store.review(args.segment, text, args.initial)
+                elif args.command == 'review-patch': result = store.review_patch(args.segment, json.loads(text))
+                elif args.command == 'story-index': result = store.story_index(args.segment, json.loads(text))
                 elif args.command == 'confirm': result = store.confirm(args.segment, text, args.baseline_input.read_bytes().decode('utf-8') if args.baseline_input else None, args.reason)
                 elif args.command == 'ledger': result = store.ledger(args.segment, json.loads(text))
         print(json.dumps(result, ensure_ascii=False, indent=2))

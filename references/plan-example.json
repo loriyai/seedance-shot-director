@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "source_version": "V0",
+  "source_sha256": "f49461cbe8c9e41d93158496d64e216358d9590bc034cf67e0b6bab7fd50041b",
+  "config_sha256": "cbb90dc1ebb7690f4d3cd28869254ed2fd1b099e614802b6e1605eaaef1e809a",
+  "defaults": {
+    "style": "国风二维动画，线条清晰",
+    "sound": "无配乐，保留脚步与对白",
+    "characters": "林舟，青年，深色长衫；沈遥，青年，灰色衣裙",
+    "scene": "院内木桌位于门旁，石板路通向院门",
+    "atmosphere": "日光平稳，林舟在桌左，沈遥在桌右"
+  },
+  "beats": [
+    {
+      "id": "E1",
+      "evidence": "林舟把信放在桌上。"
+    },
+    {
+      "id": "E2",
+      "evidence": "明日出发。"
+    },
+    {
+      "id": "E3",
+      "evidence": "我在南门等你。"
+    },
+    {
+      "id": "E4",
+      "evidence": "两人走出院门。",
+      "timing": "parallel"
+    }
+  ],
+  "blocks": [
+    {
+      "duration": 15,
+      "entry": "林舟持信站在桌左，沈遥在桌右。",
+      "exit": "两人已出院门，继续沿门外道路前行。",
+      "voices": [
+        {
+          "id": "V1",
+          "speaker": "林舟",
+          "kind": "对白",
+          "text": "明日出发。",
+          "start": 0.5,
+          "end": 1.6,
+          "pause": 0.2,
+          "profile": "短剧常速"
+        },
+        {
+          "id": "V2",
+          "speaker": "沈遥",
+          "kind": "对白",
+          "text": "我在南门等你。",
+          "start": 3.2,
+          "end": 4.9,
+          "pause": 0.3,
+          "profile": "短剧常速"
+        }
+      ],
+      "shots": [
+        {
+          "start": 0,
+          "end": 3,
+          "beats": [
+            "E1",
+            "E2"
+          ],
+          "action": "林舟站在桌左，将手中书信放到桌面，说完后手掌离开信纸。",
+          "camera": "中景，桌侧平视，固定机位。",
+          "speech": [
+            {
+              "voice": "V1"
+            }
+          ]
+        },
+        {
+          "start": 3,
+          "end": 6,
+          "beats": [
+            "E3"
+          ],
+          "action": "沈遥站在桌右，面向林舟说话。",
+          "camera": "近景，桌右平视，固定机位。",
+          "speech": [
+            {
+              "voice": "V2"
+            }
+          ]
+        },
+        {
+          "start": 6,
+          "end": 9,
+          "beats": [
+            "E4"
+          ],
+          "action": "林舟与沈遥从木桌两侧转向院门，沿石板路迈步。",
+          "camera": "全景，院门内侧，固定机位。"
+        },
+        {
+          "start": 9,
+          "end": 12,
+          "beats": [
+            "E4"
+          ],
+          "action": "林舟与沈遥沿石板路行至院门，依次跨过门槛。",
+          "camera": "中景，门侧平视，横移跟随至门柱。"
+        },
+        {
+          "start": 12,
+          "end": 15,
+          "beats": [
+            "E4"
+          ],
+          "action": "林舟与沈遥走出门外，沿道路向前，院门留在两人身后。",
+          "camera": "全景，从院内望向门外，固定机位。"
+        }
+      ]
+    }
+  ]
+}
