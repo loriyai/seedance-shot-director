@@ -4,4 +4,4 @@
 
 目标与单次可执行时长分开：按 [model-and-production-config.md](model-and-production-config.md) 将30秒目标映射到2.0的多个15秒以内块，或2.5的原生30秒块。最终校验 --duration 使用编译后的块上限，不是整段文案总时长。
 
-完整15秒块默认五镜，可按表演与连续运镜需要调整。优先完整收尾，短尾和最后两块重排按 [generation-block-splitting.md](generation-block-splitting.md)，不默认丢到下一次文案。最小时长与步长服从实际入口配置。
+完整15秒块默认五镜、允许五到七镜（仅群体入场、对白密集、情绪反转或顺序明确的多动作链可增加），任一单镜不得超过5秒。4–14.9秒短块至少使用`ceil(实际时长/5)`镜且最多5镜；倒数两块之前只有在紧随其后的跨场景或同场景跨时间边界处才允许。优先完整收尾，短尾和最后两块重排按 [generation-block-splitting.md](generation-block-splitting.md)，不默认丢到下一次文案。最小时长与步长服从实际入口配置。

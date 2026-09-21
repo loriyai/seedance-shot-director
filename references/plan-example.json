@@ -1,12 +1,14 @@
 {
-  "schema_version": 2,
+  "schema_version": 4,
   "source_version": "V0",
   "source_sha256": "f49461cbe8c9e41d93158496d64e216358d9590bc034cf67e0b6bab7fd50041b",
   "config_sha256": "cbb90dc1ebb7690f4d3cd28869254ed2fd1b099e614802b6e1605eaaef1e809a",
+  "boundary_context": {
+    "incoming": null,
+    "outgoing": null
+  },
   "defaults": {
     "style": "国风二维动画，线条清晰",
-    "sound": "无背景配乐",
-    "characters": "林舟；沈遥",
     "scene": "院内木桌位于门旁，石板路通向院门",
     "atmosphere": "日光平稳，林舟在桌左，沈遥在桌右"
   },
@@ -34,6 +36,10 @@
       "duration": 15,
       "entry": "林舟持信站在桌左，沈遥在桌右。",
       "exit": "两人已出院门，继续沿门外道路前行。",
+      "characters": [
+        {"name": "林舟"},
+        {"name": "沈遥"}
+      ],
       "voices": [
         {
           "id": "V1",
@@ -64,6 +70,7 @@
             "E1",
             "E2"
           ],
+          "action_basis": ["E1", "E2"],
           "action": "林舟站在桌左，将手中书信放到桌面，说完后手掌离开信纸。",
           "camera": "中景，桌侧平视，固定机位。",
           "speech": [
@@ -72,8 +79,8 @@
             }
           ],
           "effects": [
-            "院内轻微环境底声",
-            "信纸接触桌面的轻响"
+            {"type": "环境声", "text": "院内轻微环境底声", "provenance": "scene_ambient", "basis": "scene"},
+            {"type": "动作声", "text": "信纸接触桌面的轻响", "provenance": "visible_action", "basis": ["E1"]}
           ]
         },
         {
@@ -82,6 +89,7 @@
           "beats": [
             "E3"
           ],
+          "action_basis": ["E3"],
           "action": "沈遥站在桌右，面向林舟说话。",
           "camera": "近景，桌右平视，固定机位。",
           "speech": [
@@ -90,8 +98,8 @@
             }
           ],
           "effects": [
-            "院内轻微环境底声",
-            "衣料轻擦声"
+            {"type": "环境声", "text": "院内轻微环境底声", "provenance": "scene_ambient", "basis": "scene"},
+            {"type": "动作声", "text": "说话时的轻微衣料声", "provenance": "visible_action", "basis": ["E3"]}
           ]
         },
         {
@@ -100,11 +108,12 @@
           "beats": [
             "E4"
           ],
+          "action_basis": ["E4"],
           "action": "林舟与沈遥从木桌两侧转向院门，沿石板路迈步。",
           "camera": "全景，院门内侧，固定机位。",
           "effects": [
-            "院落环境底声",
-            "两人前行的脚步声"
+            {"type": "环境声", "text": "院落环境底声", "provenance": "scene_ambient", "basis": "scene"},
+            {"type": "动作声", "text": "两人前行的脚步声", "provenance": "visible_action", "basis": ["E4"]}
           ]
         },
         {
@@ -113,11 +122,12 @@
           "beats": [
             "E4"
           ],
+          "action_basis": ["E4"],
           "action": "林舟与沈遥沿石板路行至院门，依次跨过门槛。",
           "camera": "中景，门侧平视，横移跟随至门柱。",
           "effects": [
-            "院落环境底声",
-            "两人前行的脚步声"
+            {"type": "环境声", "text": "院落环境底声", "provenance": "scene_ambient", "basis": "scene"},
+            {"type": "动作声", "text": "两人前行的脚步声", "provenance": "visible_action", "basis": ["E4"]}
           ]
         },
         {
@@ -126,15 +136,17 @@
           "beats": [
             "E4"
           ],
+          "action_basis": ["E4"],
           "action": "林舟与沈遥走出门外，沿道路向前，院门留在两人身后。",
           "camera": "全景，从院内望向门外，固定机位。",
           "effects": [
-            "院落环境底声",
-            "两人前行的脚步声"
+            {"type": "环境声", "text": "院落环境底声", "provenance": "scene_ambient", "basis": "scene"},
+            {"type": "动作声", "text": "两人前行的脚步声", "provenance": "visible_action", "basis": ["E4"]}
           ]
         }
       ],
-      "scene_id": "courtyard_continuous"
+      "scene_id": "courtyard",
+      "time_id": "day_continuous"
     }
   ]
 }

@@ -1,6 +1,6 @@
 interface:
   display_name: "Seedance Shot Director"
-  short_description: "Seedance 中文国风分镜、轻度表演增强与版本管理"
-  default_prompt: "使用 $seedance-shot-director 处理剧本，沿用本任务配置，默认轻度表演增强并在确认后分镜，保持完整15秒五镜并优先完整收尾。"
+  short_description: "Seedance 中文国风分镜、轻度剧本审阅与版本管理"
+  default_prompt: "使用 $seedance-shot-director 处理剧本，沿用本任务配置；首次未选择审阅方式或风格时先等待选择，确认来源后按智能体散文模板输出（抬头英文质感与禁项、其余中文）。骨架定稿后先用 scripts/plan_voices.py 预计算话轮单位与切分点并做一次覆盖差分，再逐块起草；15秒块默认五镜、允许五到七镜，30秒原生块默认11镜，单镜不超过5秒。"
 policy:
   allow_implicit_invocation: true

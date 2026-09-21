@@ -12,6 +12,8 @@ import re
 import sys
 from typing import Optional
 
+from merge_story_index import validate_final_index
+
 
 def digest(text: str) -> str:
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
@@ -66,7 +68,7 @@ class ProjectState:
                 if state['project_id'] != project_id:
                     raise ValueError('项目已存在，不能静默改名。')
                 return state
-            state = {'schema_version': 1, 'project_id': project_id, 'config': {'enhancement_policy': 'ask_each', 'enhancement_level': 'light', 'output_detail': 'execution', 'delivery': 'standalone', 'music': 'none', 'aspect_ratio': '16:9'}, 'segments': {}}
+            state = {'schema_version': 1, 'project_id': project_id, 'config': {'enhancement_policy': 'ask_each', 'enhancement_level': 'light', 'output_detail': 'execution', 'delivery': 'auto', 'music': 'none', 'aspect_ratio': '16:9'}, 'segments': {}}
             self.commit(state)
             return state
 
@@ -133,21 +135,43 @@ class ProjectState:
             self.commit(state)
             return version
 
-    def require_segment(self, state, identifier):
+    def require_segment(self, state, identifier, *, full_history=False):
         segment = self.segment(state, identifier)
         if segment is None:
             raise ValueError('片段不存在，请先保存V0。')
-        for record in segment['versions'].values():
-            self.verified_text(record)
+        if full_history:
+            version_ids = list(segment['versions'])
+        else:
+            # Ordinary work only depends on these active records.  Verifying every
+            # historical full-text revision made the nth edit increasingly slow on
+            # synced drives, even though those inactive files cannot affect output.
+            version_ids = ['V0', segment.get('baseline'), segment.get('review'), segment.get('source')]
+        checked = set()
+        for version in version_ids:
+            if version and version not in checked:
+                self.verified_text(segment['versions'][version])
+                checked.add(version)
         return segment
+
+    def verify_history(self, identifier):
+        """Explicitly verify every immutable source/review version."""
+        segment = self.require_segment(self.read(), identifier, full_history=True)
+        return {'verified_versions': len(segment['versions'])}
 
     def review(self, identifier, text, initial=False):
         with self.transaction():
             state = self.read()
             segment = self.require_segment(state, identifier)
+            baseline = 'V0' if initial else segment['baseline']
+            current = segment.get('review')
+            if current:
+                record = segment['versions'][current]
+                if (record.get('baseline') == baseline and
+                        record.get('baseline_at_review', record.get('baseline')) == segment['baseline'] and
+                        self.verified_text(record) == text):
+                    return current
             number = max((int(v[1:]) for v in segment['versions'] if re.fullmatch(r'R\d+', v)), default=0)+1
             version = f'R{number}'
-            baseline = 'V0' if initial else segment['baseline']
             self.save_version(identifier, segment, version, text, kind='review', baseline=baseline, baseline_at_review=segment['baseline'])
             segment['review'] = version
             segment['source'] = None
@@ -165,7 +189,7 @@ class ProjectState:
             base = segment['versions'][review]['baseline']
             if segment['versions'][review].get('baseline_at_review', base) != segment['baseline']:
                 raise ValueError('审阅稿基线已变化；重新审阅后再确认。')
-            if re.search(r'🟩|🟦|🟨|🟥|【(?:新增动作|细节增强|文字修正|逻辑疑点)', clean_text):
+            if re.search(r'🟨|🟥|【(?:文字修正|表达调整|用户修订|文字疑点|逻辑疑点)', clean_text):
                 raise ValueError('确认稿仍含审阅标记。')
             if baseline_text is not None:
                 self.revise_in_state(identifier, segment, baseline_text, reason)
@@ -241,12 +265,13 @@ class ProjectState:
             state = self.read()
             segment = self.require_segment(state, identifier)
             baseline = segment['baseline']
-            if data.get('source_version') != baseline or data.get('source_sha256') != segment['versions'][baseline]['sha256']:
-                raise ValueError('全剧索引不属于当前原版基线。')
-            required = ('characters', 'relationships', 'scenes', 'key_props', 'timeline', 'foreshadowing', 'unknowns')
-            if any(not isinstance(data.get(key), list) for key in required):
-                raise ValueError('全剧索引需包含人物、关系、场景、关键道具、时间线、伏笔与未知项列表。')
-            segment['story_index'], segment['index_status'] = data, 'recorded'
+            record = segment['versions'][baseline]
+            source_text = self.verified_text(record)
+            validated = validate_final_index(
+                data, source_text=source_text, source_version=baseline,
+                source_sha256=record['sha256'], require_reviewed=True,
+            )
+            segment['story_index'], segment['index_status'] = validated, 'recorded'
             self.commit(state)
             return {'index_status': 'recorded', 'source_version': baseline}
 
@@ -287,7 +312,7 @@ class ProjectState:
     def config(self, changes):
         if not isinstance(changes, dict):
             raise ValueError('配置必须为JSON对象。')
-        choices = {'enhancement_level': {'light', 'standard'}, 'enhancement_policy': {'ask_each', 'always_enhance', 'always_original'}, 'output_detail': {'execution', 'director'}, 'delivery': {'standalone', 'continuous'}, 'music': {'none', 'source', 'custom'}}
+        choices = {'enhancement_level': {'light', 'standard'}, 'enhancement_policy': {'ask_each', 'always_enhance', 'always_original'}, 'output_detail': {'execution', 'director'}, 'delivery': {'auto', 'standalone', 'continuous'}, 'music': {'none', 'source', 'custom'}}
         for key, allowed in choices.items():
             if key in changes and changes[key] not in allowed:
                 raise ValueError(f'无效配置：{key}')
@@ -330,7 +355,7 @@ class ProjectState:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--project', required=True, type=Path)
-    parser.add_argument('command', choices=['init','ingest','revise','review','review-context','review-patch','story-index','confirm','use-original','source','config','ledger'])
+    parser.add_argument('command', choices=['init','ingest','revise','review','review-context','review-patch','story-index','confirm','use-original','source','config','ledger','verify-history'])
     parser.add_argument('--id', default='story')
     parser.add_argument('--segment')
     parser.add_argument('--input', type=Path)
@@ -349,6 +374,8 @@ def main(argv=None):
                 raise ValueError('该操作需要 --segment。')
             if args.command == 'source':
                 result = store.source(args.segment)
+            elif args.command == 'verify-history':
+                result = store.verify_history(args.segment)
             elif args.command == 'review-context':
                 result = store.review_context(args.segment)
             elif args.command == 'use-original':

@@ -2,7 +2,7 @@
 
 ## 能力与目标分开
 
-记录 model、entrypoint、target_duration、max_duration、min_duration、duration_step、aspect_ratio；入口已明确的时长列表优先于范围。model 或入口未知可以留空，不伪称已验证。
+记录 model、entrypoint、target_duration、max_duration、min_duration、duration_step、aspect_ratio；model 由目标时长决定（15 秒 → 2.0，30 秒 → 2.5），entrypoint 未知可以留空，不伪称已验证。入口已明确的时长列表优先于范围。
 
 官方核对日期 2026-09-13：[Seedance 2.0](https://seed.bytedance.com/zh/blog/official-launch-of-seedance-2-0) 支持 15 秒输出；[Seedance 2.5](https://seed.bytedance.com/zh/seedance2_5) 单段提升到 30 秒。2.0 的 30 秒目标编译成多个不超过 15 秒的独立块，不能只改标题冒充原生 30 秒。2.5 可使用原生 30 秒。新的型号或入口限制发生变化时查其官方说明。
 
@@ -10,23 +10,52 @@
 
 ## 本任务默认
 
-- target_duration：需在本任务确定为 15/30 秒；默认画幅 16:9。
-- enhancement_policy：首次未说明则询问；可保存 always_enhance / always_original / ask_each。当前明确指令优先，不能把一次选择推定为永久偏好。
-- enhancement_level：light（轻度）；标准 standard 仅明确选择后启用。
+- target_duration：15 或 30 秒；画幅默认 16:9。
+- model：由目标时长决定，15 秒 → Seedance 2.0，30 秒 → Seedance 2.5。不单独询问模型；30 秒走 2.5 的原生 30 秒，15 秒走 2.0。
+- enhancement_policy：不保存为偏好。每次用户发送分段文案都重新询问“轻度剧本审阅 / 直接按原版分镜”，不读取上次选择，本任务固定 ask_each。
+- enhancement_level：light（轻度审阅）；标准档已取消，审阅只做语法错漏检查与台词换行规范化。
 - output_detail：execution（执行简版）；用户要导演详版时额外给块外审阅信息，复制正文仍可执行。
-- delivery：standalone（独立收束）或 continuous（连续剪辑）；默认 standalone。
+- delivery：auto（自动，默认）、standalone（强制独立收束）或 continuous（强制连续剪辑）。auto在存在同一连续时空后继块时连续剪辑，在无后继块时独立收束；后继块跨时空仍执行两侧留白。
 - music：none（默认无配乐）、source（按原文）、custom（用户配置）。原文明确要求的场内奏乐/歌唱须保留，不能被“无背景音乐”误删。
 - voice_profiles：角色 ID、稳定声线/口音、实际音频素材绑定；单镜另记情绪语气。无素材时仅规划方向，不保证精确同声。
-- style：已定义风格或本任务自定义；无明确短片段风格时可采用第 1 项并说明，完整剧本仍需确定风格选择。
+- style：与目标时长、资产列表在同一次询问中给出，只问这三项；按 [style-profiles.md](style-profiles.md) 原样列出三项并等待用户选择，不默认采用第 1 项。一次选择在本任务内复用，不再逐段重问。
 
-上述可选项沿用默认，不为填配置逐项追问。用户说“后续都按原版”“以后默认轻度增强”即更新本任务偏好；不擅自写成全局个人配置。
+上述可选项沿用默认，不为填配置逐项追问。审阅档位每次都问，不因为用户选过一次就沿用；也不擅自写成全局个人配置。
+
+## 配置模板
+
+完整剧本阶段收到三项回答后，按下表一次提交，不反查工具字段、不逐项试错。`model` 与 `target_duration` 必须同步改：15 秒配 `2.0` 与 `max_duration` 15，30 秒配 `2.5` 与 `max_duration` 30。
+
+```json
+{
+  "target_duration": 15,
+  "model": "2.0",
+  "max_duration": 15,
+  "min_duration": 4,
+  "aspect_ratio": "16:9",
+  "style": "3D国风动漫,暗黑武侠/超写实仙侠风格",
+  "asset_list": false,
+  "enhancement_policy": "ask_each",
+  "enhancement_level": "light",
+  "output_detail": "execution",
+  "delivery": "auto",
+  "music": "none"
+}
+```
+
+```text
+python -B scripts/project_state.py --project <项目目录> config --input <配置.json>
+```
+
+提交后先回一句配置回执（时长、模型、风格、资产列表），不解释工具细节。
 
 ## 块尾声音
 
-每块在后台记录独立收束、连续剪辑或剧情硬切，直投正文不输出收尾模式。跨场景（包括同地点时间跳转）优先按 camera-transition.md 首尾各留至少1秒无口播，画面持续且计入块时长。
+每块在后台记录自动推导或明确覆盖后的独立收束、连续剪辑或剧情硬切，直投正文不输出收尾模式。V5通过`boundary_context`把批次外相邻时空也纳入推导。跨场景或同场景跨时间必须按 camera-transition.md 在前块末尾与新块开头各留至少1秒无口播画面，计入块时长；后台只记时空断点和预算，不分析跨块后期转场方法。
 
-- 独立收束：一般最后 0.3–0.8 秒无口播，跨场景尾部至少1秒，动作和摄影机可继续。
-- 连续剪辑：只用于需要与下一块连接的素材。后台记实际拼接方案、声音/动作继承，不能假定另一段视频已提供。原文话轮在语义边界分配，不重复台词；必要时后期连续配音，不承诺独立生成自动无缝。最终成片末块仍用独立收束，除非来源要求硬切。
+- 自动：若内部下一块或`boundary_context.outgoing`存在且`scene_id/time_id`均相同，当前块连续剪辑且不机械加入0.3–0.8秒尾静默；无后继片段则当前块为真正末块，独立收束；后继片段时空不同则尾部至少1秒无口播。
+- 独立收束：用户明确要求每块可单独使用时，一般最后 0.3–0.8 秒无口播；跨场景尾部至少1秒，动作和摄影机可继续。
+- 连续剪辑：只用于需要与下一块连接的素材。后台记声音/动作继承状态和无对白画面预算，不设计实际拼接方案，也不假定另一段视频已提供。原文话轮只能在来源已有标点或经程序核实的换行规范化逗号边界分配，不重复台词；必要时由用户后期连续配音，不承诺独立生成自动无缝。最终成片末块仍用独立收束，除非来源要求硬切。
 - 剧情硬切：须有原文黑屏、戛然而止等依据，同场景时可不留人为静音；跨场景留白安排在现有动态画面中，不凭空制造黑屏。
 
 默认无配乐只写当前实际音乐方案；不要一边全局“无背景音乐”，另一镜又要求配乐进入。

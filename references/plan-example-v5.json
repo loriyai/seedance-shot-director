@@ -1,0 +1,107 @@
+{
+  "schema_version": 5,
+  "source_version": "V0",
+  "source_sha256": "f49461cbe8c9e41d93158496d64e216358d9590bc034cf67e0b6bab7fd50041b",
+  "config_sha256": "cbb90dc1ebb7690f4d3cd28869254ed2fd1b099e614802b6e1605eaaef1e809a",
+  "boundary_context": {"incoming": null, "outgoing": null},
+  "defaults": {
+    "style": "国风二维动画，线条清晰",
+    "visual_quality": "二维动画线条干净,平涂色块,日光层次清晰,画面通透,空间感强",
+    "render_quality_en": "Ultra-high definition, clean line art, flat color, consistent character design, naturally focused gaze; ambient sound effects",
+    "negatives": "no duplicates, no clones, avoid AI feel, hand clipping, blurry, lip sync mismatch, plastic skin, jitter, flicker, no BGM, no subtitles, no text",
+    "scene": "院内木桌位于门旁，石板路通向院门",
+    "atmosphere": "日光平稳，林舟在桌左，沈遥在桌右"
+  },
+  "beats": [
+    {"id": "E1", "evidence": "林舟把信放在桌上。"},
+    {"id": "E2", "evidence": "明日出发。"},
+    {"id": "E3", "evidence": "我在南门等你。"},
+    {"id": "E4", "evidence": "两人走出院门。", "timing": "parallel"}
+  ],
+  "blocks": [
+    {
+      "duration": 15,
+      "scene_id": "courtyard",
+      "time_id": "day_continuous",
+      "time_label": "白天",
+      "weather": "无",
+      "track": "文戏",
+      "scene_design": {
+        "lighting": "日光自院墙右上方斜射为主光，屋檐阴影作辅助暗部",
+        "tone": "暖白日光，低对比，木料与石板保留本色",
+        "layering": "中景放人物与木桌，后景交代院门与石板路",
+        "depth_design": "建立与推进用中等景深保留环境信息，对话镜收浅聚焦说话人",
+        "blocking": "林舟在桌左，沈遥在桌右，院门位于两人身后纵深",
+        "composition": "三分法构图，院墙与石板路作引导线",
+        "environment": "院中浮尘在日光里缓慢浮动，石板路延伸到院门"
+      },
+      "characters": [{"name": "林舟"}, {"name": "沈遥"}],
+      "ambient_effects": [
+        {"type": "环境声", "text": "院内轻微环境底声", "provenance": "scene_ambient", "basis": "scene"}
+      ],
+      "voices": [
+        {"id": "V1", "speaker": "林舟", "kind": "对白", "text": "明日出发。", "start": 0.5, "end": 1.6},
+        {"id": "V2", "speaker": "沈遥", "kind": "对白", "text": "我在南门等你。", "start": 3.2, "end": 4.9}
+      ],
+      "shots": [
+        {
+          "start": 0, "end": 3, "beats": ["E1", "E2"],
+          "action": "林舟站在桌左，将手中书信放到桌面，说完后手掌离开信纸。",
+          "camera": "中景，桌侧平视，固定机位。",
+          "shot_size": "林舟的中景",
+          "movement": "固定机位",
+          "depth": "中等景深",
+          "environment": "院中浮尘在日光里缓慢浮动",
+          "reaction": "沈遥的视线随信落到桌面",
+          "speech": [{"voice": "V1"}],
+          "effects": [{"type": "动作声", "text": "信纸接触桌面的轻响", "provenance": "visible_action", "basis": ["E1"]}]
+        },
+        {
+          "start": 3, "end": 6, "beats": ["E3"],
+          "action": "沈遥站在桌右，面向林舟说话。",
+          "camera": "近景，桌右平视，固定机位。",
+          "shot_size": "沈遥的中近景",
+          "movement": "固定机位",
+          "depth": "浅景深",
+          "environment": "院中浮尘在日光里缓慢浮动",
+          "reaction": "林舟在桌对面停下手上的动作",
+          "transition": "硬切",
+          "speech": [{"voice": "V2"}]
+        },
+        {
+          "start": 6, "end": 9, "beats": ["E4"],
+          "action": "林舟与沈遥从木桌两侧转向院门，沿石板路迈步。",
+          "camera": "全景，院门内侧，固定机位。",
+          "shot_size": "林舟与沈遥的全景",
+          "movement": "固定机位",
+          "depth": "深景深",
+          "environment": "石板路上的浮尘随脚步扬起",
+          "reaction": "木桌上的信留在原处",
+          "transition": "视线承接",
+          "effects": [{"type": "动作声", "text": "两人前行的脚步声", "provenance": "visible_action", "basis": ["E4"]}]
+        },
+        {
+          "start": 9, "end": 12, "beats": ["E4"],
+          "action": "林舟与沈遥沿石板路行至院门，依次跨过门槛。",
+          "camera": "中景，门侧平视，横移跟随至门柱。",
+          "shot_size": "林舟与沈遥的中景",
+          "movement": "横移跟随",
+          "depth": "中等景深",
+          "environment": "日光沿石板路延伸，门框阴影落在门槛上",
+          "transition": "动势匹配"
+        },
+        {
+          "start": 12, "end": 15, "beats": ["E4"],
+          "action": "林舟与沈遥走出门外，沿道路向前，院门留在两人身后。",
+          "camera": "全景，从院内望向门外，固定机位。",
+          "shot_size": "两人走出院门的全景",
+          "movement": "固定机位",
+          "depth": "深景深",
+          "environment": "门外道路延伸入日光，院中浮尘继续浮动",
+          "transition": "硬切",
+          "effects": [{"type": "动作声", "text": "两人前行的脚步声", "provenance": "visible_action", "basis": ["E4"]}]
+        }
+      ]
+    }
+  ]
+}

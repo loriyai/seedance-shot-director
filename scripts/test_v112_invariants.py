@@ -41,10 +41,10 @@ class NewVoiceTests(unittest.TestCase):
         out=make_prompt([declaration('V1','陈默','对白',0,2,'0秒')],[(1,'V1','陈默','对白','出发吧。')])
         self.assertTrue(self.errors(v.validate_voice_pacing('陈默：「出发吧。」',out,15)))
 
-    def test_chain_must_match_its_shots(self):
+    def test_backend_no_longer_matches_voice_time_to_each_shot(self):
         source='陈默OS：「原来我不是什么武侠男主，只是路边小兵。」'
         out=two_shot_monologue('连续口播：陈默OS｜10.0-14.2秒｜短剧常速｜跨镜连续，镜头切换不停顿，仅按原标点自然换气。')
-        self.assertTrue(any('镜头不匹配' in e for e in self.errors(v.validate(source,out,15))))
+        self.assertEqual(self.errors(v.validate_voice_pacing(source,out,15)), [])
 
     def test_audio_cannot_enter_silent_tail(self):
         out=make_prompt([declaration('V1','陈默','对白',12,15,'0.5秒')],[(5,'V1','陈默','对白','大家现在跟我往前走吧。')])
@@ -115,9 +115,9 @@ class BlockContractTests(unittest.TestCase):
         return [d for d in diagnostics if d.level=='ERROR']
 
     def test_required_preamble_and_placeholder(self):
-        out=block().replace('人物：陈默，青年，深色长衫。','')
+        out=block().replace('人物：陈默','')
         self.assertTrue(self.errors(v.validate_structure(out,15)))
-        self.assertTrue(self.errors(v.validate_structure(block().replace('深色长衫','<待填写>'),15)))
+        self.assertTrue(self.errors(v.validate_structure(block().replace('坟间小路与两座墓碑。','<待填写>'),15)))
 
     def test_model_caps_and_declared_duration(self):
         self.assertTrue(self.errors(v.validate_structure(block(30,10),30,model='2.0')))
@@ -127,14 +127,14 @@ class BlockContractTests(unittest.TestCase):
     def test_tail_rebalance_and_thirty_remainder(self):
         self.assertEqual(self.errors(v.validate_structure(block(13,4)+'\n'+block(4,1,2),15)),[])
         self.assertEqual(self.errors(v.validate_structure(block(30,10)+'\n'+block(8,3,2),30)),[])
-        self.assertEqual(self.errors(v.validate_structure(block(15,4),15)), [])
+        self.assertTrue(self.errors(v.validate_structure(block(15,4),15)))
 
     def test_minimum_step_and_thirty_advisory(self):
         self.assertTrue(self.errors(v.validate_structure(block(4,1),15,min_duration=5)))
         self.assertTrue(self.errors(v.validate_structure(block(4.5,2),15,duration_step=1)))
         result=v.validate_structure(block(30,1),30)
-        self.assertEqual(self.errors(result),[])
-        self.assertTrue(any('8-12' in d.message for d in result))
+        self.assertTrue(self.errors(result))
+        self.assertTrue(any('11镜' in d.message for d in result))
 
     def test_deferred_is_opt_in(self):
         raw='陈默：「走吧。」'
@@ -228,9 +228,9 @@ class StateTests(unittest.TestCase):
         self.assertEqual(self.store.verified_text(record),original)
 
     def test_returning_to_original_deactivates_abandoned_review(self):
-        self.store.review('seg001','已放弃的增强稿')
+        self.store.review('seg001','已放弃的审阅稿')
         self.store.use_original('seg001')
-        with self.assertRaises(ValueError): self.store.confirm('seg001','旧增强稿内容')
+        with self.assertRaises(ValueError): self.store.confirm('seg001','旧审阅稿内容')
         self.assertIn('R1',self.store.read()['segments']['seg001']['versions'])
 
 

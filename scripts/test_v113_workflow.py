@@ -42,7 +42,11 @@ class WorkflowTests(unittest.TestCase):
     def review_result(self, result, passed=True):
         return {'plan_sha256': result['plan_sha256'], 'prompt_sha256': result['prompt_sha256'],
                 'passed': passed, 'note': '已核对来源动作、台词身份、出门过程与观看重点。',
-                'warnings_reviewed': [i for i, d in enumerate(result['diagnostics']) if d['level'] == 'WARN']}
+                'warnings_reviewed': [i for i, d in enumerate(result['diagnostics']) if d['level'] == 'WARN'],
+                'checks': {'character_headers': True, 'sound_header': True,
+                           'action_provenance': True, 'shot_count': True, 'shot_duration': True,
+                           'dialogue_boundaries': True, 'spacetime_boundaries': True, 'hidden_cuts': True,
+                           'effects_provenance': True}}
 
     def test_compilation_and_finalization_share_plan_and_check_once(self):
         plan = example_plan(self.store)
@@ -67,23 +71,34 @@ class WorkflowTests(unittest.TestCase):
                 plan['blocks'][0]['voices'][0]['text'] = '今日出发。'
             else:
                 plan['blocks'][0]['shots'].pop()
-            result = c.compile_project(self.project, 'seg001', plan)
-            self.assertGreater(result['errors'], 0)
-            with self.assertRaises(ValueError):
-                c.finalize(self.project, 'seg001', result['build'], self.review_result(result))
+            if mutation == 'shots':
+                with self.assertRaises(ValueError):
+                    c.compile_project(self.project, 'seg001', plan)
+            else:
+                result = c.compile_project(self.project, 'seg001', plan)
+                self.assertGreater(result['errors'], 0)
+                with self.assertRaises(ValueError):
+                    c.finalize(self.project, 'seg001', result['build'], self.review_result(result))
 
-    def test_span_split_keeps_source_once_and_rejects_duplicate(self):
+    def test_span_split_accepts_source_punctuation_or_normalised_newline(self):
         plan = example_plan(self.store)
         voice = plan['blocks'][0]['voices'][0]
-        voice.update(start=2.4, end=3.5)
+        voice.update(text='明日出发，立刻行动。', start=2.4, end=5.5)
+        shots = plan['blocks'][0]['shots']
+        shots[0]['speech'] = [{'voice': 'V1', 'span': [0, 5]}]
+        shots[1]['speech'].insert(0, {'voice': 'V1', 'span': [5, 10]})
+        rendered = c.render(plan, SOURCE + '\n林舟：「明日出发\n立刻行动。」', self.store.read()['config'])
+        self.assertIn('：“明日出发，”', rendered)
+        self.assertIn('：“立刻行动。”', rendered)
+        with self.assertRaisesRegex(ValueError, '已有标点'):
+            c.render(plan, SOURCE + '\n林舟：「明日出发立刻行动。」', self.store.read()['config'])
+
+        plan = example_plan(self.store)
         shots = plan['blocks'][0]['shots']
         shots[0]['speech'] = [{'voice': 'V1', 'span': [0, 2]}]
         shots[1]['speech'].insert(0, {'voice': 'V1', 'span': [2, 5]})
-        rendered = c.render(plan, SOURCE, self.store.read()['config'])
-        self.assertIn('：“明日”', rendered)
-        self.assertIn('：“出发。”', rendered)
-        shots[1]['speech'][0]['span'] = [0, 5]
-        with self.assertRaises(ValueError): c.render(plan, SOURCE, self.store.read()['config'])
+        with self.assertRaisesRegex(ValueError, '已有标点'):
+            c.render(plan, SOURCE, self.store.read()['config'])
 
     def test_unknown_field_and_unmapped_beat_are_rejected(self):
         for mutation in ('unknown', 'unmapped', 'foreign_evidence'):
@@ -153,11 +168,15 @@ class WorkflowTests(unittest.TestCase):
         first['shots'].pop(1)
         for index, shot in enumerate(first['shots']):
             shot['start'], shot['end'] = index * 3, (index + 1) * 3 if index < 3 else 13
-        plan['blocks'].append({'duration': 4, 'scene_id': first['scene_id'], 'entry': first['exit'], 'exit': '沈遥站在门外，林舟在旁。',
+        plan['blocks'].append({'duration': 4, 'scene_id': first['scene_id'], 'time_id': first['time_id'], 'entry': first['exit'], 'exit': '沈遥站在门外，林舟在旁。',
+            'characters': copy.deepcopy(first['characters']),
             'header': {'scene': '院门外道路，院门在人物身后', 'atmosphere': '日光平稳，沈遥在林舟右侧'},
             'voices': [second_voice], 'shots': [{'start': 0, 'end': 4, 'beats': ['E3'],
+                'action_basis': ['E3'],
                 'action': '沈遥停在院门外，朝身旁林舟说话。', 'camera': '双人中景，门外侧面平视，固定机位。',
-                'speech': [{'voice': 'V2'}], 'effects': ['两人停步的脚步声']} ]})
+                'speech': [{'voice': 'V2'}], 'effects': [
+                    {'type':'动作声','text':'两人停步的脚步声','provenance':'visible_action','basis':['E3']}
+                ]} ]})
         result = c.compile_project(self.project, 'seg001', plan)
         self.assertEqual(result['diagnostics'], [])
         prompt = Path(result['prompt']).read_text(encoding='utf-8')
@@ -172,9 +191,9 @@ class WorkflowTests(unittest.TestCase):
         block = plan['blocks'][0]
         block['duration'] = 30
         template = copy.deepcopy(block['shots'][-1])
-        for i in range(5, 10):
+        for i in range(6):
             shot = copy.deepcopy(template)
-            shot.update(start=i * 3, end=(i + 1) * 3)
+            shot.update(start=15 + i * 2.5, end=15 + (i + 1) * 2.5)
             block['shots'].append(shot)
         result = c.compile_project(self.project, 'seg001', plan)
         self.assertEqual(result['diagnostics'], [])
@@ -190,7 +209,7 @@ class WorkflowTests(unittest.TestCase):
     def test_review_patch_preserves_complete_versions_and_exact_newlines(self):
         original = '第一段\r\n林舟放下书信。\r\n末段保持。'
         self.store.review('seg001', original)
-        payload = self.patch_payload([{'old': '林舟放下书信。', 'new': '🟦【细节增强：原“林舟放下书信。”】林舟将书信平放桌面，手掌离开信纸。'}])
+        payload = self.patch_payload([{'old': '林舟放下书信。', 'new': '🟨【文字修正：原“林舟放下书信书。”】林舟放下书信。'}])
         result = self.store.review_patch('seg001', payload)
         self.assertEqual(result['version'], 'R2')
         context = ProjectState(self.project).review_context('seg001')
@@ -221,9 +240,32 @@ class WorkflowTests(unittest.TestCase):
 
     def test_global_index_is_validated_against_baseline_and_invalidated_by_revision(self):
         segment = self.store.read()['segments']['seg001']
-        data = {'source_version': 'V0', 'source_sha256': segment['versions']['V0']['sha256'],
-                'characters': ['林舟', '沈遥'], 'relationships': [], 'scenes': ['院内'], 'key_props': ['书信'],
-                'timeline': ['约定明日出发'], 'foreshadowing': [], 'unknowns': []}
+        data = {
+            'index_schema': 'lite-v1', 'source_version': 'V0',
+            'source_sha256': segment['versions']['V0']['sha256'],
+            'coverage': [{'part_id': 'full', 'owned_ref': 'L1-L4'}],
+            'review_status': 'reviewed',
+            'characters': [
+                {'id': 'C001', 'names': ['林舟'], 'first_ref': 'L1'},
+                {'id': 'C002', 'names': ['沈遥'], 'first_ref': 'L3'},
+            ],
+            'relationships': [
+                {'id': 'R001', 'parties': ['C001', 'C002'],
+                 'changes': [{'scene': 'S001', 'state': '约定次日出发', 'ref': 'L2-L3'}]},
+            ],
+            'scenes': [
+                {'id': 'S001', 'place': '院内', 'ref': 'L1-L3'},
+                {'id': 'S002', 'place': '院门', 'ref': 'L4'},
+            ],
+            'key_props': [
+                {'id': 'P001', 'names': ['书信'],
+                 'changes': [{'scene': 'S001', 'state': '由林舟放在桌上', 'ref': 'L1'}]},
+            ],
+            'timeline': [
+                {'id': 'T001', 'scene': 'S001', 'event': '林舟约定明日出发', 'ref': 'L2'},
+            ],
+            'foreshadowing': [], 'unknowns': [],
+        }
         self.store.story_index('seg001', data)
         self.store.revise('seg001', SOURCE + '\n书信随后被烧毁。', '用户修订')
         self.assertEqual(self.store.read()['segments']['seg001']['index_status'], 'stale')

@@ -6,7 +6,7 @@ import validate_dialogue_and_timeline as validator
 
 
 def block(duration=15, count=5, number=1):
-    lines = [f"生成块 {number:02d}｜{duration:g}秒｜16:9", "国风3D人物与旧布木石材质，无配乐，保留环境声。", "人物：陈默，青年，深色长衫。", "场景：坟间小路与两座墓碑。", "本块氛围与站位：阴天柔光，陈默站在两坟之间。", "收尾方式：独立收束"]
+    lines = [f"生成块 {number:02d}｜{duration:g}秒｜16:9", "国风3D人物与旧布木石材质，无配乐，保留环境声。", "人物：陈默", "场景：坟间小路与两座墓碑。", "本块氛围与站位：阴天柔光，陈默站在两坟之间。", "收尾方式：独立收束"]
     for index in range(count):
         start = duration * index / count
         end = duration * (index + 1) / count
@@ -16,6 +16,8 @@ def block(duration=15, count=5, number=1):
             "画面与动作：陈默背向摄影机，沿墓间小路向纵深走远。",
             "摄影机与构图：固定侧后方中远景，双坟在画面两侧，陈默位于小路中轴。",
         ]
+    tail_start = max(0, duration - 0.5)
+    lines.append(f"声音安排：{tail_start:g}-{duration:g}秒无口播，仅保留本镜动作或状态的连续画面，不定格。")
     lines.append("无对白尾帧：最后0.5秒无对白，陈默继续走远，保留脚步声。")
     return "\n".join(lines)
 
@@ -53,16 +55,20 @@ class ValidatorTests(unittest.TestCase):
     def test_full_fifteen_has_five_continuous_shots(self):
         self.assertEqual(validator.validate_structure(block(), 15), [])
 
-    def test_fifteen_four_shots_requests_director_review(self):
-        result = validator.validate_structure(block(count=4), 15)
-        self.assertNoErrors(result)
-        self.assertHas(result, "默认五镜", "WARN")
+    def test_fifteen_shots_outside_five_to_seven_is_hard_error(self):
+        for count in (4, 8):
+            with self.subTest(count=count):
+                self.assertHas(validator.validate_structure(block(count=count), 15), "5-7镜", "ERROR")
+        for count in (5, 6, 7):
+            with self.subTest(count=count):
+                self.assertNoErrors([d for d in validator.validate_structure(block(count=count), 15)
+                                     if '镜' in d.message])
 
-    def test_only_last_two_blocks_may_be_short(self):
+    def test_historical_short_blocks_without_spacetime_ids_require_review(self):
         self.assertNoErrors(validator.validate_structure(block() + "\n" + block(8, 3, 2), 15))
         self.assertNoErrors(validator.validate_structure(block() + "\n\n" + block(8, 3, 2), 15))
         self.assertNoErrors(validator.validate_structure(block(13, 4) + "\n" + block(4, 1, 2), 15))
-        self.assertHas(validator.validate_structure(block(8, 3) + "\n" + block(number=2) + "\n" + block(number=3), 15), "非末尾", "ERROR")
+        self.assertHas(validator.validate_structure(block(8, 3) + "\n" + block(number=2) + "\n" + block(number=3), 15), "无法机械确认", "WARN")
 
     def test_four_seconds_is_inclusive_minimum(self):
         self.assertNoErrors(validator.validate_structure(block(4, 1), 15))
@@ -72,6 +78,12 @@ class ValidatorTests(unittest.TestCase):
 
     def test_thirty_mode_still_works(self):
         self.assertNoErrors(validator.validate_structure(block(30, 10), 30))
+
+    def test_any_shot_over_five_seconds_fails(self):
+        self.assertHas(validator.validate_structure(block(30, 5), 30), "最长不得超过5秒", "ERROR")
+        self.assertNoErrors(validator.validate_structure(block(25, 5), 30))
+        almost = block().replace("0.000000-3.000000", "0.000000-5.0000001")
+        self.assertHas(validator.validate_structure(almost, 15), "最长不得超过5秒", "ERROR")
 
     def test_missing_and_repeated_shot_numbers(self):
         for number in (2, 7):
@@ -91,9 +103,9 @@ class ValidatorTests(unittest.TestCase):
     def test_fixed_camera_is_not_missing_movement(self):
         self.assertEqual(validator.shot_risk_warnings(block(4, 1), 4, "01", "1"), [])
 
-    def test_internal_cut_warns_but_entry_transition_does_not(self):
+    def test_camera_internal_cut_errors_but_entry_transition_does_not(self):
         prompt = block(4, 1).replace("固定侧后方", "先拍正面，再切到侧后方")
-        self.assertHas(validator.shot_risk_warnings(prompt, 4, "01", "1"), "额外切镜", "WARN")
+        self.assertHas(validator.shot_risk_warnings(prompt, 4, "01", "1"), "额外切镜", "ERROR")
         self.assertFalse(any("额外切镜" in item.message for item in validator.shot_risk_warnings(block(4, 1) + "\n衔接：切到本镜。", 4, "01", "1")))
 
     def test_missing_camera_mode_warns(self):
@@ -147,8 +159,104 @@ class ValidatorTests(unittest.TestCase):
 
     def test_dialogue_may_span_shots(self):
         source = "陈默：「江湖，我来了！」"
-        output = speech("陈默", "江湖，") + "\n[镜头2]\n" + speech("陈默", "我来了！")
+        output = "[镜头1]\n" + speech("陈默", "江湖，") + "\n[镜头2]\n" + speech("陈默", "我来了！")
         self.assertEqual(validator.validate_dialogue(source, output), [])
+        self.assertEqual(validator.validate_dialogue_split_boundaries(source, output, "01", {"陈默"}), [])
+
+    def test_dialogue_cannot_split_inside_continuous_words(self):
+        source = "陈默：「江湖，我来了！」"
+        output = "[镜头1]\n" + speech("陈默", "江") + "\n[镜头2]\n" + speech("陈默", "湖，我来了！")
+        self.assertHas(validator.validate_dialogue_split_boundaries(source, output, "01", {"陈默"}), "已有标点", "ERROR")
+
+    def test_dialogue_cannot_split_inside_punctuation_cluster(self):
+        source = "陈默：「真的吗？！我不信。」"
+        output = "[镜头1]\n" + speech("陈默", "真的吗？") + "\n[镜头2]\n" + speech("陈默", "！我不信。")
+        self.assertHas(validator.validate_dialogue_split_boundaries(source, output, "01", {"陈默"}), "已有标点", "ERROR")
+
+    def test_redundant_dialogue_spaces_warn_but_foreign_spacing_does_not(self):
+        _, diagnostics = validator.analyse_source_dialogue('陈默：「我  不走。」')
+        self.assertHas(diagnostics, "多余空格", "WARN")
+        _, diagnostics = validator.analyse_source_dialogue('陈默：「Seedance 2.5 可以用。」')
+        self.assertFalse(any('多余空格' in item.message for item in diagnostics))
+        _, diagnostics = validator.analyse_source_dialogue('陈默：「我\u00a0不走。」')
+        self.assertHas(diagnostics, "多余空格", "WARN")
+        _, diagnostics = validator.analyse_source_dialogue('画面文字：「天 地」')
+        self.assertFalse(any('多余空格' in item.message for item in diagnostics))
+
+    def test_dialogue_split_cannot_hide_behind_new_voice_ids_or_silent_shot(self):
+        source = '陈默：「明日出发。」'
+        output = '[镜头1]\n' + speech('陈默', '明日') + '\n[镜头2]\n画面与动作：陈默抬头。\n[镜头3]\n' + speech('陈默', '出发。')
+        self.assertHas(
+            validator.validate_dialogue_split_boundaries(source, output, '01', {'陈默'}),
+            '已有标点',
+            'ERROR',
+        )
+
+    def test_dialogue_split_rule_also_crosses_generation_block_boundary(self):
+        source = '陈默：「明日出发。」'
+        first = block(number=1).replace('[镜头5]', '[镜头5]\n' + speech('陈默', '明日'))
+        second = block(number=2).replace('[镜头1]', '[镜头1]\n' + speech('陈默', '出发。'))
+        self.assertHas(validator.validate_voice_pacing(source, first + '\n' + second, 15), '已有标点', 'ERROR')
+
+    def test_dialogue_cannot_split_at_quote_but_can_at_normalised_newline(self):
+        quoted = '他说：“好。”然后走。'
+        self.assertFalse(validator.valid_speech_split_boundary(quoted, quoted.index('”')))
+        source = '陈默：「第一行\n第二行。」'
+        output = '[镜头1]\n' + speech('陈默', '第一行，') + '\n[镜头2]\n' + speech('陈默', '第二行。')
+        self.assertEqual(validator.validate_dialogue_split_boundaries(source, output, '01', {'陈默'}), [])
+        self.assertFalse(validator.source_backed_speech_boundary(
+            '陈默：「第一行第二行。」', '第一行，第二行。', 4, '陈默', '对白'
+        ))
+
+    def test_normalised_newline_boundary_also_crosses_generation_blocks(self):
+        source = '陈默：「第一行\n第二行。」'
+        first = block(number=1).replace('[镜头5]', '[镜头5]\n' + speech('陈默', '第一行，'))
+        second = block(number=2).replace('[镜头1]', '[镜头1]\n' + speech('陈默', '第二行。'))
+        diagnostics = validator.validate_dialogue_split_boundaries(
+            source, first + '\n' + second, None, {'陈默'}
+        )
+        self.assertEqual(diagnostics, [])
+
+    def test_spaced_foreign_dialogue_keeps_legal_cross_shot_boundary(self):
+        source = '陈默：「Seedance 2.5 可以用，明天试试。」'
+        output = (
+            '[镜头1]\n' + speech('陈默', 'Seedance 2.5 可以用，')
+            + '\n[镜头2]\n' + speech('陈默', '明天试试。')
+        )
+        self.assertEqual(validator.validate_dialogue(source, output), [])
+        self.assertEqual(
+            validator.validate_dialogue_split_boundaries(source, output, '01', {'陈默'}),
+            [],
+        )
+
+    def test_newline_normalisation_preserves_existing_punctuation_and_final_line(self):
+        self.assertEqual(
+            validator.normalise_utterance('第一行\n第二行\n最后一句'),
+            '第一行，第二行，最后一句',
+        )
+        self.assertEqual(
+            validator.normalise_utterance('第一行！\n第二行。\n最后一句'),
+            '第一行！第二行。最后一句',
+        )
+        for punctuation in ('、', '；', '：', ';', ':'):
+            with self.subTest(punctuation=punctuation):
+                self.assertEqual(
+                    validator.normalise_utterance(f'甲{punctuation}\n乙'),
+                    f'甲{punctuation}乙',
+                )
+        turns = validator.extract_source_dialogue('陈默：甲；\n乙')
+        self.assertEqual([turn.text for turn in turns], ['甲；乙'])
+        self.assertFalse(validator.normalise_utterance('第一行\n最后一句').endswith('，'))
+
+    def test_sound_arrangement_cannot_use_legacy_or_inline_bypass(self):
+        without_last = '\n'.join(line for line in block().splitlines() if not line.startswith('声音安排：'))
+        self.assertHas(validator.validate_structure(without_last, 15), '最后一个镜头必须', 'ERROR')
+        inline = block().replace(
+            '画面与动作：陈默背向摄影机，沿墓间小路向纵深走远。',
+            '画面与动作：陈默背向摄影机，声音安排：0-1秒无口播，随后沿墓间小路走远。',
+            1,
+        )
+        self.assertHas(validator.validate_structure(inline, 15), '独立字段', 'ERROR')
 
     def test_order_and_added_or_repeated_speech_fail(self):
         source = "陈默：「问。」\n吴天德：「答。」"
@@ -186,10 +294,10 @@ class ValidatorTests(unittest.TestCase):
         self.assertEqual(validator.spoken_unit_count("悟性50，资质38，血脉0"), 12)
         self.assertEqual(validator.spoken_unit_count("10、11、101、3.14"), 11)
 
-    def test_cross_shot_monologue_requires_voice_chain(self):
+    def test_cross_shot_direct_prompt_no_longer_requires_voice_chain(self):
         source = "陈默OS：「原来我不是什么武侠男主，只是路边小兵。」"
         diagnostics = validator.validate_voice_pacing(source, two_shot_monologue(), 15)
-        self.assertHas(diagnostics, "缺少“连续口播”", "ERROR")
+        self.assertNoErrors(diagnostics)
 
     def test_legacy_pacing_without_pause_budget_requires_review(self):
         source = "陈默OS：「原来我不是什么武侠男主，只是路边小兵。」"
