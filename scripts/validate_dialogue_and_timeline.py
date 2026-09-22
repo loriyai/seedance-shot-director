@@ -732,9 +732,9 @@ def validate_sound_arrangement_layout(output: str) -> list[Diagnostic]:
             if any(not body.strip() for body in lines):
                 diagnostics.append(Diagnostic('ERROR', '“声音安排：”内容不得为空。', block_number, shot_number))
             if position == len(shots) - 1:
-                if len(lines) != 1:
-                    diagnostics.append(Diagnostic('ERROR', '最后一个镜头必须且只能输出一次“声音安排：”。', block_number, shot_number))
-                elif '台词' in lines[0] and not QUOTED_TEXT.search(shot_text):
+                if len(lines) > 1:
+                    diagnostics.append(Diagnostic('ERROR', '最后一个镜头最多输出一次“声音安排：”。', block_number, shot_number))
+                elif lines and '台词' in lines[0] and not QUOTED_TEXT.search(shot_text):
                     diagnostics.append(Diagnostic(
                         'ERROR',
                         '末镜没有口播时“声音安排：”不得出现“台词”字样，改写为“本镜无口播，仅保留环境与动作声与连续画面”。',
@@ -921,16 +921,8 @@ def validate_structure(output: str, duration: float, min_duration: float = 4.0, 
             diagnostics.append(Diagnostic('ERROR', f'块时长只能为 {min_duration:g}-{maximum:g} 秒，当前为 {target:g} 秒。', number))
         if duration_step and abs(target/duration_step-round(target/duration_step)) > EPSILON:
             diagnostics.append(Diagnostic('ERROR', '时长不符合已配置入口步长。', number))
-        if index < len(blocks)-2 and abs(target-duration)>EPSILON:
-            permitted = (
-                permitted_internal_short_blocks is not None
-                and index + 1 in permitted_internal_short_blocks
-                and min_duration-EPSILON <= target < 15-EPSILON
-            )
-            if permitted_internal_short_blocks is None and min_duration-EPSILON <= target < 15-EPSILON:
-                diagnostics.append(Diagnostic('WARN', '正文不含scene_id/time_id，无法机械确认该内部短块是否由下一时空边界形成；须人工核对。', number))
-            elif not permitted:
-                diagnostics.append(Diagnostic('ERROR', '非末尾两块通常必须为完整目标时长；仅经结构化规划核实因下一时空边界形成的4-14.9秒短块可例外。', number))
+        elif not duration_step and abs(target-round(target)) > EPSILON:
+            diagnostics.append(Diagnostic('ERROR', f'块时长必须为整数（模型只能选择整数时长），当前为 {target:g} 秒。', number))
         shots = parse_shots(text)
         preamble = text[:SHOT_HEADER.search(text).start()] if SHOT_HEADER.search(text) else text
         nonempty = [line.strip() for line in preamble.splitlines() if line.strip()]

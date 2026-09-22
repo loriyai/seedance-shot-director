@@ -16,22 +16,22 @@ SOURCE = (REFERENCES / 'plan-example-source.txt').read_bytes().decode('utf-8')
 
 
 def compact_plan(store):
-    plan = json.loads((REFERENCES / 'plan-example.json').read_text(encoding='utf-8'))
+    plan = json.loads((REFERENCES / 'plan-example-v5.json').read_text(encoding='utf-8'))
     source = store.source('seg001')
-    plan.update(schema_version=5, source_version=source['version'], source_sha256=source['sha256'],
+    plan.update(source_version=source['version'], source_sha256=source['sha256'],
                 config_sha256=digest(c.canonical(store.read()['config'])))
     block = plan['blocks'][0]
-    block.pop('entry')
-    block.pop('exit')
-    block['ambient_effects'] = [
+    block.pop('entry', None)
+    block.pop('exit', None)
+    block.setdefault('ambient_effects', [
         {'type': '环境声', 'text': '院内轻微环境底声', 'provenance': 'scene_ambient', 'basis': 'scene'}
-    ]
+    ])
     for voice in block['voices']:
-        voice.pop('pause')
-        voice.pop('profile')
+        voice.pop('pause', None)
+        voice.pop('profile', None)
     for shot in block['shots']:
-        shot.pop('action_basis')
-        shot.pop('effects')
+        shot.pop('action_basis', None)
+        shot.pop('effects', None)
     return plan
 
 

@@ -4,6 +4,7 @@ import unittest
 import compile_plan as c
 import test_v113_workflow as workflow
 from test_v113_workflow import example_plan, SOURCE
+from test_v119_performance_refactor import compact_plan as v5_plan
 
 
 class V115HardeningTests(unittest.TestCase):
@@ -24,13 +25,15 @@ class V115HardeningTests(unittest.TestCase):
                 c.render(plan, SOURCE, self.store.read()['config'])
 
     def test_character_metadata_is_validated_but_not_rendered(self):
-        plan = self.plan()
+        plan = v5_plan(self.store)
         first, second = plan['blocks'][0]['characters']
         first.update(stage='白衣', asset='@林舟参考', first_visible_shot=2, last_visible_shot=4)
         second['offscreen'] = True
         rendered = c.render(plan, SOURCE, self.store.read()['config'])
         self.assertEqual([line for line in rendered.splitlines() if line.startswith('人物：')],
-                         ['人物：林舟；沈遥'])
+                         ['人物：林舟；'])
+        self.assertEqual([line for line in rendered.splitlines() if line.startswith('画外：')],
+                         ['画外：沈遥；'])
 
     def test_sound_header_is_compiled_only_from_project_music(self):
         plan = self.plan()

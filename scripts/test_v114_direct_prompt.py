@@ -121,11 +121,13 @@ class DirectPromptTests(unittest.TestCase):
         self.assertTrue(any(d.level == 'ERROR' and '其他镜头不得' in d.message
                             for d in v.validate_structure(rendered, 15)))
 
-    def test_last_shot_must_keep_exactly_one_sound_arrangement(self):
+    def test_last_shot_sound_arrangement_is_optional_but_never_duplicated(self):
         rendered = c.render(self.new_plan(), SOURCE, {})
-        rendered = '\n'.join(line for line in rendered.splitlines() if not line.startswith('声音安排：'))
-        self.assertTrue(any(d.level == 'ERROR' and '最后一个镜头必须' in d.message
-                            for d in v.validate_structure(rendered, 15)))
+        stripped = '\n'.join(line for line in rendered.splitlines() if not line.startswith('声音安排：'))
+        self.assertFalse(any(d.level == 'ERROR' for d in v.validate_structure(stripped, 15)))
+        doubled = rendered + '\n声音安排：本镜无口播，仅保留环境与动作声与连续画面。'
+        self.assertTrue(any(d.level == 'ERROR' and '最多输出一次' in d.message
+                            for d in v.validate_structure(doubled, 15)))
 
 
 if __name__ == '__main__':

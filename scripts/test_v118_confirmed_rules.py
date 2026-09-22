@@ -142,14 +142,15 @@ class V118ConfirmedRulesTests(unittest.TestCase):
                                          '台词：陈默说：“Seedance 2.5 可以用。”')
         self.assertFalse(any(d.level == 'ERROR' for d in unchanged))
 
-    def test_internal_short_permission_and_five_second_floor(self):
+    def test_any_four_to_fifteen_second_block_is_legal_but_must_be_integer(self):
         prompt = block(8, 2) + '\n' + block(number=2) + '\n' + block(number=3)
-        allowed = v.validate_structure(prompt, 15, permitted_internal_short_blocks={1})
-        self.assertFalse(any(d.level == 'ERROR' and '非末尾' in d.message for d in allowed))
-        denied = v.validate_structure(prompt, 15, permitted_internal_short_blocks=set())
-        self.assertTrue(any(d.level == 'ERROR' and '非末尾' in d.message for d in denied))
+        allowed = v.validate_structure(prompt, 15)
+        self.assertFalse([d.render() for d in allowed if d.level == 'ERROR'])
+        fractional = block(7.5, 2) + '\n' + block(number=2) + '\n' + block(number=3)
+        self.assertTrue(any(d.level == 'ERROR' and '整数' in d.message
+                            for d in v.validate_structure(fractional, 15)))
 
-        for seconds, minimum in ((5, 1), (5.1, 2), (10, 2), (10.1, 3), (14.9, 3)):
+        for seconds, minimum in ((5, 1), (6, 2), (10, 2), (11, 3), (14, 3)):
             with self.subTest(seconds=seconds, minimum=minimum):
                 valid = v.validate_structure(block(seconds, minimum), 15)
                 self.assertFalse([d.render() for d in valid if d.level == 'ERROR'])

@@ -1,6 +1,10 @@
 # Seedance Shot Director
 
-版本：V1.23
+版本：V1.25
+
+V1.25 把审阅阶段的机械步骤收成一条命令并去掉重复往返：新增 `scripts/derive_review.py`，用一份编辑清单 JSON（`line_edits` 最小原位替换 + `space_notes` 仅标记）一次派生完整审阅稿，同遍完成话轮换行规范化、标记落位与覆盖差分闸门，`old` 找不到唯一整行或差分不通过时直接报错且不写文件，已有输出不覆盖；配套 `scripts/test_v125_review_derivation.py` 回归这些闸门与剥壳链路。同一会话内已读的 `core-invariants.md`、本阶段参考件与 `source_sha256` 未变的预检侧车改为复用，不再重复读取；完整审阅稿以文件交付，聊天只列变化点与疑点，用户明确要求时才逐字展示；`intake-gate.md` 明确保存 V0 后不为核对与全剧原稿的差异额外做一轮比对。
+
+V1.24 放开块时长并补三条机械闸门：入口的 15 秒只作为上限，块时长按自然内容在 4–15 秒之间取整（`ceil` 后再看跨时空留白，必须是整数或入口合法档位），同一连续时空的内部块不再强制凑满 15 秒，尾部余量超过 `max(1.0, 留白需求)+1.0` 秒记为疑似填秒；新增机位配额（固定机位 5 镜块 ≤2、6–7 镜块 ≤3，每块至少 1 个移动镜头，不得连续三镜硬切，硬切 ≤50%，同场景每 3 块至少 1 次环绕/升降/摇摄）；新增人物台账（根级 `cast`/`aliases`、块级 `departed`、人物 `offscreen`/`note`），人物在相邻块消失必须标画外或写明离场依据，新人物首次出现必须绑定来源节拍，直投 `人物：` 只列可见角色并新增 `画外：` 行。`场景：` 只写场景名；`声音安排：` 只在真有约束时输出，末镜有口播且无留白时不再输出空话。
 
 V1.23 把审阅档位收敛为纯审阅：分段文案的两个选项改为“轻度剧本审阅 / 直接按原版分镜”，移除动作细化与新增动作这一类表演增强功能，审阅只做语法与错漏检查（多字、少字、错别字、标点、语序与指代、逻辑冲突）和台词换行规范化。标记只保留 `🟨`（文字修正、表达调整、用户修订）与 `🟥`（文字疑点、逻辑疑点）；`strip_markers.py` 的标记正则与标题识别（`审阅稿 Rn（基于原版 V0.x）`）同步更新，历史 `优化剧本 Rn（审阅稿｜……）` 标题仍兼容。表演、反应与镜头设计全部留到分镜阶段。
 
@@ -47,6 +51,7 @@ python -B -X utf8 scripts/prepare_source.py --source source.txt --output source-
 python -B -X utf8 scripts/plan_voices.py --source source.txt --text "台词原文" --profile 短剧常速 --start 0.5
 python -B -X utf8 scripts/plan_voices.py --source source.txt --plan plan.json
 python -B -X utf8 scripts/check_source_coverage.py --source source.txt --draft review.txt --narration
+python -B -X utf8 scripts/derive_review.py --source source.txt --edits edits.json --output R1.md
 python -B -X utf8 scripts/strip_markers.py --review R1.txt --output clean.txt
 python -B -X utf8 scripts/project_state.py --help
 python -B -X utf8 scripts/compile_plan.py --help

@@ -36,7 +36,8 @@ class DirectingRuleTests(unittest.TestCase):
         return c.render(plan, SOURCE, self.store.read()['config'])
 
     def messages(self, plan, level=None):
-        return [d.message for d in c.shot_language_diagnostics(plan)
+        combined = c.shot_language_diagnostics(plan) + c.continuity_diagnostics(plan)
+        return [d.message for d in combined
                 if level is None or d.level == level]
 
     def test_os_voice_keeps_inner_os_wording(self):
@@ -64,18 +65,24 @@ class DirectingRuleTests(unittest.TestCase):
         plan = self.plan()
         shots = plan['blocks'][0]['shots']
         tail = shots.pop()
-        shots.append(dict(tail, start=12, end=13.5))
+        lead = dict(tail, start=12, end=13.5)
+        lead.pop('speech', None)
+        shots.append(lead)
         shots.append(dict(tail, start=13.5, end=15))
         rendered = self.render(plan)
         self.assertEqual(sum(1 for line in rendered.splitlines() if line.startswith('[')), 6)
         self.assertIn('镜头以极具张力的', rendered)
         tail = shots.pop()
-        shots.append(dict(tail, start=13, end=14))
+        lead = dict(tail, start=13, end=14)
+        lead.pop('speech', None)
+        shots.append(lead)
         shots.append(dict(tail, start=14, end=15))
         rendered = self.render(plan)
         self.assertEqual(sum(1 for line in rendered.splitlines() if line.startswith('[')), 7)
         tail = shots.pop()
-        shots.append(dict(tail, start=14.5, end=14.7))
+        lead = dict(tail, start=14.5, end=14.7)
+        lead.pop('speech', None)
+        shots.append(lead)
         shots.append(dict(tail, start=14.7, end=15))
         with self.assertRaisesRegex(ValueError, '5-7镜'):
             self.render(plan)

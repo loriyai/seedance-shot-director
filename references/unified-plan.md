@@ -66,10 +66,11 @@ V5 复核记录只包含真实语义判断：
 - `defaults`
 - `beats`
 - `blocks`
+- 可选 `cast`（`{scene_id: [角色名]}`，本场在场人物台账）与 `aliases`（`{群体名: [成员名]}`，例如“家人”）
 
 `boundary_context` 只含 `incoming` 与 `outgoing`；每项为 `null` 或 `{"scene_id":"…","time_id":"…"}`。`null` 表示锁定来源在该方向确实没有相邻片段，不是“未知”。处理中段、分批或局部修改时从全剧索引或相邻台账填真实时空。
 
-`defaults` 必须含稳定的 `style`、`scene`、`atmosphere`；可选 `assets` 与抬头覆盖项 `visual_quality`（中文执行质感）、`render_quality_en`（英文质感前缀）、`negatives`（英文禁项）。`style`原样填写用户选定的完整选项文字；编译时以项目配置中的已选风格原文为准，不用提炼词替换。三者缺省时使用 [visual-style-system.md](visual-style-system.md) 的风格预设。某块不同才用 `header` 局部覆盖。不在 `defaults` 写自由文本人物或声音总括：人物由块记录生成。
+`defaults` 必须含稳定的 `style`、`scene`、`atmosphere`；可选 `scene_name`（直投 `场景：` 只输出它，缺省取 `scene` 的第一分句）、`assets` 与抬头覆盖项 `visual_quality`（中文执行质感）、`render_quality_en`（英文质感前缀）、`negatives`（英文禁项）。`style`原样填写用户选定的完整选项文字；编译时以项目配置中的已选风格原文为准，不用提炼词替换。三者缺省时使用 [visual-style-system.md](visual-style-system.md) 的风格预设。某块不同才用 `header` 局部覆盖。不在 `defaults` 写自由文本人物或声音总括：人物由块记录生成。
 
 `beats` 每项含唯一 `id` 与锁定来源内可定位的 `evidence`。可加 `timing: "parallel" / "serial"`；仅串行时填 `basis` 记录原文先后或物理依赖。无例外时不填空元数据。
 
@@ -77,7 +78,7 @@ V5 复核记录只包含真实语义判断：
 
 每块必填：
 
-- `duration`
+- `duration`（4–15 秒整数，按自然内容 `ceil` 后再看留白；不写 7.5 这类界面选不出的值）
 - `scene_id`、`time_id`
 - `characters`
 - `voices`
@@ -88,9 +89,9 @@ V5 复核记录只包含真实语义判断：
 - `time_label`（元数据“时间”，缺省由 `time_id` 推导）、`weather`（缺省“无”）
 - `scene_design`：对象，七项必填 `lighting`、`tone`、`layering`、`depth_design`、`blocking`、`composition`、`environment`，按顺序编译成块级设计段
 - `track`：`文戏`（默认）或 `武戏`，决定镜位引导句用中性词还是战斗词
-- `header`、`ending`、`silent_head`、`silent_tail`、`ambient_effects`、`entry`、`exit`、`notes`
+- `header`、`ending`、`silent_head`、`silent_tail`、`ambient_effects`、`entry`、`exit`、`notes`、`departed`（本块离场的角色名列表，作为“人物消失”的依据）
 
-`characters` 是对象列表，无人时为空列表。每项必填 `name`，可选简短 `stage`、实际 `@素材` 的 `asset`、`offscreen`、`first_visible_shot` 与 `last_visible_shot`。除 `name` 外皆为后台元数据，不进入直投 `人物：`。外貌、服装与剧情状态只在来源支持的镜头或实际素材绑定中处理，不用人物行补参考图。
+`characters` 是对象列表，无人时为空列表。每项必填 `name`，可选简短 `stage`、实际 `@素材` 的 `asset`、`offscreen`、`first_visible_shot`、`last_visible_shot` 与简述画外状态的 `note`。直投 `人物：` 只列本块可见角色；`offscreen` 的角色改写进 `画外：角色名（note）；`。同一场景相邻块的人物集合必须连续：角色消失要么本块标 `offscreen`，要么写进块级 `departed` 并给出离场依据；新角色首次出现必须能在来源节拍、镜头动作或 `entry`/`exit` 里找到依据，否则按硬错误处理。外貌、服装与剧情状态只在来源支持的镜头或实际素材绑定中处理，不用人物行补参考图。
 
 `scene_id` 是地点，`time_id` 是连续叙事时间；任一变化都分块。`ending`、`silent_head`、`silent_tail` 只在需要覆盖项目默认时填。时空跳转会自动把前尾与后首无对白画面提高至至少 1 秒，不规划后期转场方法。
 
@@ -113,6 +114,8 @@ V5 的 `entry` / `exit` 在简单块可省略，编译器会用首镜与末镜 `
 ## 镜头
 
 每镜必填 `start`、`end`、`beats`、`action`、`camera`；同块第二镜及以后应写 `transition`（进入本镜的转场方式，缺省按“硬切”编译并给出警告）。
+
+机位配额（硬检查）：固定机位 5 镜块 ≤2、6–7 镜块 ≤3；每块至少 1 个移动镜头；不得连续三镜硬切，硬切占比 ≤50%；同场景每 3 个连续块至少 1 次环绕/升降/摇摄。
 
 散文正文用到的镜头层字段：
 

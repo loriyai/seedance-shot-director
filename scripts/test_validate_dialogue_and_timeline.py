@@ -64,11 +64,12 @@ class ValidatorTests(unittest.TestCase):
                 self.assertNoErrors([d for d in validator.validate_structure(block(count=count), 15)
                                      if '镜' in d.message])
 
-    def test_historical_short_blocks_without_spacetime_ids_require_review(self):
+    def test_short_blocks_are_legal_and_fractional_durations_are_rejected(self):
         self.assertNoErrors(validator.validate_structure(block() + "\n" + block(8, 3, 2), 15))
         self.assertNoErrors(validator.validate_structure(block() + "\n\n" + block(8, 3, 2), 15))
         self.assertNoErrors(validator.validate_structure(block(13, 4) + "\n" + block(4, 1, 2), 15))
-        self.assertHas(validator.validate_structure(block(8, 3) + "\n" + block(number=2) + "\n" + block(number=3), 15), "无法机械确认", "WARN")
+        self.assertNoErrors(validator.validate_structure(block(8, 3) + "\n" + block(number=2) + "\n" + block(number=3), 15))
+        self.assertHas(validator.validate_structure(block(7.5, 3), 15), "整数", "ERROR")
 
     def test_four_seconds_is_inclusive_minimum(self):
         self.assertNoErrors(validator.validate_structure(block(4, 1), 15))
@@ -250,7 +251,9 @@ class ValidatorTests(unittest.TestCase):
 
     def test_sound_arrangement_cannot_use_legacy_or_inline_bypass(self):
         without_last = '\n'.join(line for line in block().splitlines() if not line.startswith('声音安排：'))
-        self.assertHas(validator.validate_structure(without_last, 15), '最后一个镜头必须', 'ERROR')
+        self.assertNoErrors(validator.validate_structure(without_last, 15))
+        doubled = block() + '\n声音安排：本镜无口播，仅保留环境与动作声与连续画面。'
+        self.assertHas(validator.validate_structure(doubled, 15), '最多输出一次', 'ERROR')
         inline = block().replace(
             '画面与动作：陈默背向摄影机，沿墓间小路向纵深走远。',
             '画面与动作：陈默背向摄影机，声音安排：0-1秒无口播，随后沿墓间小路走远。',

@@ -8,14 +8,19 @@
 - `defaults` 必须含 `style`、`scene`、`atmosphere` 三项非空单行文本，可选 `assets`、`visual_quality`、`render_quality_en`、`negatives`（三个抬头覆盖项缺省取风格预设）；不写人物总括或声音总括。
 - 某块场景或氛围不同时用块级 `header` 覆盖同名键，块内优先。
 - `boundary_context.incoming` / `outgoing` 只能是 `null` 或 `{"scene_id":…, "time_id":…}`；`null` 仅表示该方向确实没有相邻片段，不表示未知。
+- 根级可选 `cast` 与 `aliases`；`defaults`/`header` 可选 `scene_name`，直投 `场景：` 只输出它（缺省取 `scene` 的第一分句）。
 
 ## 生成块
 
 - 必须：`duration`、`scene_id`、`time_id`、`characters`、`voices`、`shots`。
-- 可选：`header`、`entry`、`exit`、`ending`、`silent_head`、`silent_tail`、`ambient_effects`、`notes`、`time_label`、`weather`、`scene_design`、`track`。
+- 可选：`header`、`entry`、`exit`、`ending`、`silent_head`、`silent_tail`、`ambient_effects`、`notes`、`time_label`、`weather`、`scene_design`、`track`、`departed`。
 - `scene_design` 为对象且七项全必填：`lighting`、`tone`、`layering`、`depth_design`、`blocking`、`composition`、`environment`；缺省时正文按场景与氛围兜底并给出警告。
 - `track` 只能为 `文戏`（默认）或 `武戏`；`time_label` 缺省由 `time_id` 推导，`weather` 缺省为 `无`。
-- 15 秒块默认 5 镜、允许 5–7 镜（6 镜取 1／2／3／4／8／11 槽，7 镜取 1／2／3／4／6／8／11 槽）；30 秒原生块默认 11 镜（偏离给警告）；4–14.9 秒短块镜数为 `ceil(时长/5)` 至 5；任何单镜不超过 5 秒。
+- 15 秒块默认 5 镜、允许 5–7 镜（6 镜取 1／2／3／4／8／11 槽，7 镜取 1／2／3／4／6／8／11 槽）；30 秒原生块默认 11 镜（偏离给警告）；4–14.9 秒块镜数为 `ceil(时长/5)` 至 5；任何单镜不超过 5 秒。
+- 块时长按自然内容在 4–15 秒之间取整：必须是整数（配置了 `duration_step` 时必须符合步长），不写 7.5 秒这类界面选不出的值；同一连续时空的内部块可以短于 15 秒。
+- 尾部余量（块时长 − 最后一个话轮结束时间）超过 `max(1.0, 留白需求) + 1.0` 秒会给“疑似填秒”警告，须按自然时长重排。
+- 机位配额：固定机位 5 镜块 ≤2、6–7 镜块 ≤3，每块至少 1 个移动镜头，不得连续三镜硬切，硬切占比 ≤50%，同场景每 3 个连续块至少 1 次环绕/升降/摇摄；违反为硬错误（同场景空间变化不足为警告）。
+- 人物台账：人物记录可选 `note`（简短画外状态）与块级 `departed`（本块离场人物）；根级 `cast`（`{scene_id: [角色名]}`）限定每场人物，根级 `aliases` 可把“家人”这类群体名映射到成员名。人物同上块相比消失且既非 `offscreen` 也不在 `departed` 中，或新人物首次出现找不到来源节拍/入场动作依据，均为硬错误。
 - 首尾无口播时段自动推导：入口时空变化 → 头部至少 1 秒；出口时空变化 → 尾部至少 1 秒；无后继且独立收束 → 尾部至少 0.5 秒。该时段必须落在首镜、末镜之内，且不能被任何口播占用。
 
 ## 节拍
@@ -41,8 +46,8 @@
 - `camera` 不得出现隐藏切镜措辞（切至、切到、切回、切换、间切、反打、蒙太奇，或景别词加“切”）。`action` 只有在同句出现摄影语境词时才按隐藏切镜拦下。
 - `ambient_effects` 只接受 `scene_ambient` / `user` 来源与对应 `basis`；块级已有稳定底声时，镜头不得再写“静默”，镜头 `effects` 只记本镜相对变化。
 - 镜头 `effects` 中 `source` / `visible_action` 的 `basis` 必须引用**本镜** `beats`。
-- 末镜 `声音安排：` 由编译器按末镜是否带口播选择措辞：有口播写“本镜台词按来源合法标点自然连贯，不另拆分或增加停顿”，无口播写“本镜无口播，仅保留环境与动作声与连续画面”；无口播镜出现“台词”字样即为硬错误。
-- 人物记录 `characters[]` 只渲染角色名；`stage`、`asset`、`offscreen`、`first_visible_shot`、`last_visible_shot` 留后台，且首次/最后可见镜头必须是本块范围内的整数。
+- `声音安排：` 只在真有时间约束时输出，且必须单独成行：块首仅在本块相对上一块发生跨时空变化时写从 0 秒开始的无口播区间；末镜只在有尾部无口播预算（跨时空留白或独立收束）或本镜确实没有口播时输出一次，末镜有口播且无尾部留白时整行省略；末镜最多一行，无口播镜出现“台词”字样即为硬错误。
+- 人物记录 `characters[]` 直投只渲染可见角色的名字：`人物：` 只列 `offscreen` 之外的角色，`offscreen` 的角色输出到 `画外：角色名（note）；` 一行（`note` 可选，≤24 字且不含分号）；`stage`、`asset`、`first_visible_shot`、`last_visible_shot` 留后台，且首次/最后可见镜头必须是本块范围内的整数。
 
 ## 第一块冒烟测试
 
@@ -71,3 +76,7 @@
 - “生成块track只能为…”：`track` 只能写 `文戏` 或 `武戏`。
 - “景别未绑定具名主体”：把景别写成 `角色名的中景` 这类主体强绑定形式，或在 `shot_size` 里补齐。
 - “本块缺少块级设计”：补 `scene_design` 七项，或在导演详版中接受兜底。
+- “块时长必须为整数”：把 7.5 秒这类时长改成整数，或按入口步长配置 `duration_step`。
+- “固定机位N个超过上限／整块没有任何移动镜头／连续三个镜头都写硬切”：按机位配额重新分配运镜与切镜方式。
+- “在上一块在场、本块消失”：把该角色标 `offscreen` 写进 `画外：` 行，或在块级 `departed` 写明离场依据。
+- “首次出现必须绑定来源节拍”：新人物要能在本块节拍摘句、镜头动作或 `entry`/`exit` 里找到依据，否则补进 `cast`/`aliases` 或删掉。
