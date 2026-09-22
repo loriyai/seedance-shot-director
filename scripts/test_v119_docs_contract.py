@@ -41,7 +41,7 @@ class V119DocumentationContractTests(unittest.TestCase):
         self.assertIn('`场景：` 只写场景名', core)
         self.assertIn('画外', core)
         self.assertIn('必须是整数', self.read('references/compiler-field-contract.md'))
-        self.assertIn('入口的 15 秒只是上限', self.read('references/duration-mode.md'))
+        self.assertIn('入口的 15 秒只是上限', core)
         self.assertIn('机位与切镜配额', self.read('references/camera-transition.md'))
         self.assertIn('台词行只允许三种形式', core)
         self.assertIn('不得把说话方式写进语气栏', core)

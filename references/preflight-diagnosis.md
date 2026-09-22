@@ -32,14 +32,14 @@
 新分镜默认读：
 
 - `dialogue-normalization.md`（有口播时）
-- `dialogue-capacity.md`、`dialogue-coverage.md`（有口播时）
+- `dialogue-capacity.md`（有口播时）
 - `generation-block-splitting.md`
 - `shot-splitting.md`、`timing-allocation.md`
 - `unified-plan.md`
-- `generation-block-contract.md`、`prompt-template.md`
+- `prompt-template.md`（含块契约与完整示例）
 - `qc-fallback.md`
 
-不另读 `generation-block-ledger.md` 来重建平行台账；V5 的节拍、人物、声音和镜头已在同一规划中，只在查历史台账语义时读该文件。
+不另建平行台账：V5 的节拍、人物、声音、镜头与覆盖复核清单都在同一份统一规划里。
 
 ### 分镜专项（命中才读）
 
