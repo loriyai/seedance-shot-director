@@ -10,6 +10,12 @@
 - `boundary_context.incoming` / `outgoing` 只能是 `null` 或 `{"scene_id":…, "time_id":…}`；`null` 仅表示该方向确实没有相邻片段，不表示未知。
 - 根级可选 `cast` 与 `aliases`；`defaults`/`header` 可选 `scene_name`，直投 `场景：` 只输出它（缺省取 `scene` 的第一分句）。
 
+- 根级可选 `scenes`：`{scene_id: 场景名}`。有它时 `场景：` 由查表得出（块级 `header.scene_name` > `scenes[scene_id]` > `defaults.scene_name` > `scene` 首分句），不再靠手写；同一 `scene_id` 渲染出不同场景名、或块级场景名与查表结果冲突为硬错误；不同 `scene_id` 共用同一场景名给出警告。
+
+- 事实门禁（V5）：`人物：` 只列本块可见角色——未标 `offscreen` 的角色必须在本块至少一个镜头的 `action`／`reaction`／`transition` 里出现，否则硬错误；镜头里出现本场 `cast` 成员却没写进人物行给出警告；`scene_design` 任一分句出现本块 `characters` 之外的角色名为警告（站位与阶段状态必须逐块写，场景包只保留持久背景层）。
+
+- 事实自检表：`compile` 额外产出 `facts.txt`，`check-block` 结果内联 `facts`，逐块列出场景名（含 scene_id）、时间、天气、时长、镜数、可见人物、画外人物、发声角色、无口播头/中/尾区间、语气覆盖与音效来源。交付前红项清零。
+
 ## 生成块
 
 - 必须：`duration`、`scene_id`、`time_id`、`characters`、`voices`、`shots`。

@@ -312,6 +312,148 @@ def scene_label(header):
     return line(header['scene']).split('，', 1)[0].strip()
 
 
+def scene_name_map(plan) -> dict:
+    """根级 scenes：{scene_id: 场景名}，把场景名从手写改成查表。"""
+    raw = plan.get('scenes')
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError('scenes 必须是 {scene_id: 场景名} 的映射。')
+    return {safe_line(key): safe_line(value) for key, value in raw.items()}
+
+
+def safe_line(value) -> str:
+    """与 line() 相同，但允许空值，供可缺省的参考信息使用。"""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return ''
+    return line(value)
+
+
+def resolved_scene_name(plan, block) -> str:
+    """块级 header > 根级 scenes[scene_id] > defaults.scene_name > scene 首分句。"""
+    explicit = safe_line((block.get('header') or {}).get('scene_name'))
+    if explicit:
+        return explicit
+    mapped = scene_name_map(plan).get(safe_line(block.get('scene_id', '')))
+    if mapped:
+        return mapped
+    return scene_label(plan.get('defaults') or {})
+
+
+def mentions(text: str, name: str) -> bool:
+    """宽松匹配：全名命中，或长名取前 3 字命中（覆盖“紫衣门弟子”→“紫衣门众人”）。"""
+    if not name:
+        return False
+    if name in text:
+        return True
+    return len(name) >= 3 and name[:3] in text
+
+
+def known_character_names(plan) -> set:
+    names = set()
+    for block in plan.get('blocks', []):
+        for record in block.get('characters', []):
+            names.add(safe_line(record['name']))
+    for group, members in (plan.get('aliases') or {}).items():
+        names.add(safe_line(group))
+        names.update(safe_line(member) for member in members)
+    for members in (plan.get('cast') or {}).values():
+        names.update(safe_line(member) for member in members)
+    return {name for name in names if name}
+
+
+def scene_diagnostics(plan):
+    """场景行与 scene_id 必须一一对应：同 scene_id 同名，不同 scene_id 不同名。"""
+    diagnostics = []
+    if plan.get('schema_version', 1) < 5:
+        return diagnostics
+    mapping = scene_name_map(plan)
+    first_name, first_label = {}, {}
+    for index, block in enumerate(plan['blocks'], 1):
+        label = f'{index:02d}'
+        scene_id = safe_line(block.get('scene_id', ''))
+        rendered = resolved_scene_name(plan, block)
+        declared = safe_line((block.get('header') or {}).get('scene_name'))
+        if declared and mapping.get(scene_id) and declared != mapping[scene_id]:
+            diagnostics.append(Diagnostic(
+                'ERROR', f'块级场景名“{declared}”与 scene_id {scene_id} 的映射“{mapping[scene_id]}”不一致。',
+                label, '1'))
+        if scene_id in first_name and first_name[scene_id] != rendered:
+            diagnostics.append(Diagnostic(
+                'ERROR', f'同一 scene_id {scene_id} 在不同块渲染出不同场景名：'
+                         f'{first_name[scene_id]} / {rendered}。', label, '1'))
+        else:
+            first_name.setdefault(scene_id, rendered)
+            first_label.setdefault(scene_id, label)
+        if rendered in {name for sid, name in first_name.items() if sid != scene_id}:
+            diagnostics.append(Diagnostic(
+                'WARN', f'不同 scene_id 使用了同一个场景名“{rendered}”：'
+                         f'地点不同应换 scene_id，或确认确是同一地点换时间。', label, '1'))
+    return diagnostics
+
+
+def character_visibility_diagnostics(plan):
+    """人物行只列本块可见角色：列了必须在镜头里出现，镜头里出现也要列。"""
+    diagnostics = []
+    if plan.get('schema_version', 1) < 5:
+        return diagnostics
+    aliases = {safe_line(group): [safe_line(item) for item in members]
+               for group, members in (plan.get('aliases') or {}).items()}
+    cast_map = {safe_line(scene): [safe_line(name) for name in members]
+                for scene, members in (plan.get('cast') or {}).items()}
+    for index, block in enumerate(plan['blocks'], 1):
+        label = f'{index:02d}'
+        shot_text = ' '.join(
+            f"{shot.get('action', '')} {shot.get('reaction', '')} {shot.get('transition', '')}"
+            for shot in block.get('shots', []))
+        if not shot_text.strip():
+            continue
+        records = block.get('characters', [])
+        names = {safe_line(record['name']) for record in records}
+        for record in records:
+            name = safe_line(record['name'])
+            if record.get('offscreen'):
+                continue
+            candidates = [name] + aliases.get(name, [])
+            if not any(mentions(shot_text, candidate) for candidate in candidates):
+                diagnostics.append(Diagnostic(
+                    'ERROR', f'人物行列了 {name}，但本块没有任何镜头写到他/她；'
+                             f'请改为 offscreen（画外）或补进镜头动作。', label, '1'))
+        for member in cast_map.get(safe_line(block.get('scene_id', '')), []):
+            if member in names:
+                continue
+            if mentions(shot_text, member):
+                diagnostics.append(Diagnostic(
+                    'WARN', f'镜头里出现了 {member}，但人物行未列；请核对是否漏写可见角色。',
+                    label, '1'))
+    return diagnostics
+
+
+def design_entity_diagnostics(plan):
+    """设计段提到的人名必须属于本块角色表，避免提前引用未登场角色。"""
+    diagnostics = []
+    if plan.get('schema_version', 1) < 5:
+        return diagnostics
+    known = known_character_names(plan)
+    if not known:
+        return diagnostics
+    for index, block in enumerate(plan['blocks'], 1):
+        label = f'{index:02d}'
+        design = block.get('scene_design') or {}
+        if not isinstance(design, dict):
+            continue
+        text = ' '.join(line(value) for value in design.values() if isinstance(value, str))
+        names = {safe_line(record['name']) for record in block.get('characters', [])}
+        for candidate in sorted(known):
+            if candidate in names:
+                continue
+            if mentions(text, candidate):
+                diagnostics.append(Diagnostic(
+                    'WARN', f'设计段提到本块未登场角色“{candidate}”：'
+                             f'站位与阶段状态逐块写，场景包只保留持久背景层。', label, '1'))
+    return diagnostics
+
+
 def validate_effects(effects, shot_beats):
     if not isinstance(effects, list):
         raise ValueError('V3每镜effects必须为列表；确无声音时使用空列表或唯一字符串“静默”。')
@@ -796,7 +938,7 @@ def prose_shot_line(shot, shot_index, shot_count, track, block_environment, tran
 
 def render(plan, source, config, *, audit=False):
     keys(plan, ('schema_version', 'source_version', 'source_sha256', 'config_sha256',
-                'defaults', 'beats', 'blocks'), ('boundary_context', 'cast', 'aliases'))
+                'defaults', 'beats', 'blocks'), ('boundary_context', 'cast', 'aliases', 'scenes'))
     if plan['schema_version'] not in (1, 2, 3, 4, 5):
         raise ValueError('不支持的规划版本。')
     if plan['schema_version'] >= 4 and 'boundary_context' not in plan:
@@ -884,7 +1026,7 @@ def render(plan, source, config, *, audit=False):
             if offscreen_line:
                 lines.append('画外：' + offscreen_line + '；')
             lines += [
-                '场景：' + scene_label(header) + '；时间：' + time_label_of(block) + '；天气：'
+                '场景：' + resolved_scene_name(plan, block) + '；时间：' + time_label_of(block) + '；天气：'
                 + line(block.get('weather', '无')) + '；',
                 '音频：' + audio_line(block) + '；',
                 design_paragraph(header, block) + '。',
@@ -1070,32 +1212,107 @@ def tone_report(block) -> dict:
     }
 
 
-def dialogue_gap_diagnostics(block, head, tail, label) -> list:
-    """块内无口播填空：扣除必需的跨时空留白后，头部与内部空档超过上限即警告。"""
+def dialogue_gap_values(block, head, tail) -> dict:
+    """扣除必需留白后的头部、中间最大空档与尾部空档。"""
     voices = sorted(((v['start'], v['end']) for v in block.get('voices') or []),
                     key=lambda item: item[0])
     if not voices:
-        return []
+        return {}
     limit = max(GAP_LIMIT_FLOOR, GAP_LIMIT_RATIO * block['duration'])
     gaps = [('开头', voices[0][0] - head)]
     cursor = voices[0][1]
     for start, end in voices[1:]:
         gaps.append(('中间', start - cursor))
         cursor = max(cursor, end)
-    tail_gap = block['duration'] - voices[-1][1] - tail
+    return {
+        'limit': limit,
+        'head': gaps[0][1],
+        'interior': max((gap for position, gap in gaps[1:]), default=0.0),
+        'tail': block['duration'] - voices[-1][1] - tail,
+    }
+
+
+def dialogue_gap_diagnostics(block, head, tail, label) -> list:
+    """块内无口播填空：扣除必需的跨时空留白后，头部与内部空档超过上限即警告。"""
+    values = dialogue_gap_values(block, head, tail)
+    if not values:
+        return []
+    limit = values['limit']
     warnings = []
-    for position, gap in gaps:
-        if gap > limit + 1e-6:
-            warnings.append(Diagnostic(
-                'WARN',
-                f'{position}无口播约{gap:.1f}秒（上限约{limit:.1f}秒）：疑似填秒，'
-                f'请把可并行的台词与动作并行，或把相邻块内容借进本块。', label))
-    if tail_gap > limit + 1e-6:
+    if values['head'] > limit + 1e-6:
         warnings.append(Diagnostic(
             'WARN',
-            f'尾部无口播约{tail_gap:.1f}秒（上限约{limit:.1f}秒）：疑似填秒，'
+            f'开头无口播约{values["head"]:.1f}秒（上限约{limit:.1f}秒）：疑似填秒，'
+            f'请按自然时长取整，或把相邻块内容借进本块。', label))
+    if values['interior'] > limit + 1e-6:
+        warnings.append(Diagnostic(
+            'WARN',
+            f'中间无口播约{values["interior"]:.1f}秒（上限约{limit:.1f}秒）：疑似填秒，'
+            f'请把可并行的台词与动作并行，或把相邻块内容借进本块。', label))
+    if values['tail'] > limit + 1e-6:
+        warnings.append(Diagnostic(
+            'WARN',
+            f'尾部无口播约{values["tail"]:.1f}秒（上限约{limit:.1f}秒）：疑似填秒，'
             f'请按自然时长取整，或把相邻块内容借进本块。', label))
     return warnings
+
+
+def facts_sheet(plan, config) -> list:
+    """每块的机器自检表：把交付物里能被读出的事实逐条摊开。"""
+    rows = []
+    for index, block in enumerate(plan['blocks'], 1):
+        head, tail, _ = block_handles(plan, index - 1, config)
+        gaps = dialogue_gap_values(block, head, tail)
+        visible = [safe_line(record['name']) for record in block.get('characters', [])
+                   if not record.get('offscreen')]
+        offscreen = [safe_line(record['name']) for record in block.get('characters', [])
+                     if record.get('offscreen')]
+        speakers = sorted({f"{safe_line(voice['speaker'])}（{safe_line(voice.get('kind', '对白'))}）"
+                           for voice in block.get('voices', [])})
+        effects = sorted({safe_line(effect.get('provenance', ''))
+                          for shot in block.get('shots', []) for effect in shot.get('effects', [])
+                          if isinstance(effect, dict)} |
+                         {safe_line(effect.get('provenance', ''))
+                          for effect in block.get('ambient_effects', [])
+                          if isinstance(effect, dict)})
+        rows.append({
+            'block': f'{index:02d}',
+            'scene_id': safe_line(block.get('scene_id', '')),
+            'scene_name': resolved_scene_name(plan, block),
+            'time': safe_line(block.get('time_label') or block.get('time_id', '')),
+            'weather': safe_line(block.get('weather', '无')),
+            'duration': block['duration'],
+            'shots': len(block.get('shots', [])),
+            'visible_characters': visible,
+            'offscreen_characters': offscreen,
+            'speakers': speakers,
+            'dialogue_free': {
+                'head': round(gaps.get('head', 0.0), 2),
+                'interior': round(gaps.get('interior', 0.0), 2),
+                'tail': round(gaps.get('tail', 0.0), 2),
+                'limit': round(gaps.get('limit', 0.0), 2),
+            } if gaps else {},
+            'tone': tone_report(block),
+            'effect_sources': effects,
+        })
+    return rows
+
+
+def facts_text(rows) -> str:
+    lines_out = ['块 | 场景(scene_id) | 时间 | 天气 | 时长 | 镜数 | 可见人物 | 画外 | 发声 | 无口播(头/中/尾) | 语气 | 音效来源']
+    for row in rows:
+        gaps = row['dialogue_free']
+        gap_text = (f"{gaps.get('head')}/{gaps.get('interior')}/{gaps.get('tail')}"
+                    if gaps else '—')
+        tone = f"{row['tone']['with_tone']}/{row['tone']['voices']}"
+        if row['tone']['signal_without_tone']:
+            tone += f"（缺{','.join(row['tone']['signal_without_tone'])}）"
+        lines_out.append(
+            f"{row['block']} | {row['scene_name']}({row['scene_id']}) | {row['time']} | {row['weather']} | "
+            f"{row['duration']}秒 | {row['shots']} | {'、'.join(row['visible_characters']) or '无'} | "
+            f"{'、'.join(row['offscreen_characters']) or '无'} | {'、'.join(row['speakers']) or '无'} | "
+            f"{gap_text} | {tone} | {'、'.join(row['effect_sources']) or '无'}")
+    return '\n'.join(lines_out) + '\n'
 
 
 def validate_plan_timing(plan, config):
@@ -1137,7 +1354,7 @@ def check_block(project, segment, plan, block_number=None, *, final_block=False)
     if plan.get('schema_version') != 5:
         raise ValueError('check-block只接受V5规划。')
     keys(plan, ('schema_version', 'source_version', 'source_sha256', 'config_sha256',
-                'boundary_context', 'defaults', 'beats', 'blocks'), ('cast', 'aliases'))
+                'boundary_context', 'defaults', 'beats', 'blocks'), ('cast', 'aliases', 'scenes'))
     if plan['source_version'] != source_record['version'] or plan['source_sha256'] != source_record['sha256']:
         raise ValueError('规划来源已变化，请更新受影响规划。')
     if plan['config_sha256'] != digest(canonical(config)):
@@ -1178,6 +1395,9 @@ def check_block(project, segment, plan, block_number=None, *, final_block=False)
         boundary_confirmed = False
     local_plan = {key: plan[key] for key in ('schema_version', 'source_version',
                                              'source_sha256', 'config_sha256', 'defaults')}
+    for optional_key in ('scenes', 'cast', 'aliases'):
+        if optional_key in plan:
+            local_plan[optional_key] = plan[optional_key]
     local_plan.update(boundary_context={'incoming': incoming, 'outgoing': outgoing},
                       beats=beats, blocks=[block])
     source = Path(source_record['path']).read_bytes().decode('utf-8')
@@ -1194,8 +1414,9 @@ def check_block(project, segment, plan, block_number=None, *, final_block=False)
     diagnostics += validate_plan_timing(local_plan, config)
     diagnostics += shot_language_diagnostics(local_plan)
     local_label = f'{block_number:02d}'
-    diagnostics += [item for item in cast_diagnostics(plan) + continuity_diagnostics(plan)
-                    if item.block in (local_label, None)]
+    local_checks = (cast_diagnostics(plan) + continuity_diagnostics(plan) + scene_diagnostics(plan)
+                    + character_visibility_diagnostics(plan) + design_entity_diagnostics(plan))
+    diagnostics += [item for item in local_checks if item.block in (local_label, None)]
     names = {canonical_speaker(v['speaker'], v['kind']) for v in block['voices']}
     actual, unassigned = extract_output_dialogue(prompt, names)
     expected, _ = extract_output_dialogue(audit_prompt, names)
@@ -1213,6 +1434,7 @@ def check_block(project, segment, plan, block_number=None, *, final_block=False)
         'shot_count': len(block['shots']),
         'silent_shots': prompt.count('环境音效：静默。') + prompt.count('本镜静默'),
         'tone_coverage': tone_report(block),
+        'facts': facts_sheet(local_plan, config)[0] if block['shots'] else None,
         'stats': stats,
         'diagnostics': [asdict(d) for d in sorted(diagnostics, key=lambda d: d.level != 'ERROR')[:8]],
         'coverage': '未检查整段来源覆盖；全部块完成后仍须运行compile和语义复核。',
@@ -1251,6 +1473,9 @@ def compile_project(project, segment, plan):
     diagnostics += shot_language_diagnostics(plan)
     diagnostics += cast_diagnostics(plan)
     diagnostics += continuity_diagnostics(plan)
+    diagnostics += scene_diagnostics(plan)
+    diagnostics += character_visibility_diagnostics(plan)
+    diagnostics += design_entity_diagnostics(plan)
     names = {canonical_speaker(v['speaker'], v['kind']) for b in plan['blocks'] for v in b['voices']}
     actual, unassigned = extract_output_dialogue(prompt, names)
     expected, _ = extract_output_dialogue(audit_prompt, names)
@@ -1272,7 +1497,9 @@ def compile_project(project, segment, plan):
               'warning_groups': grouped_warnings,
               'semantic_status': 'pending', 'status': 'hard_failed' if errors else 'needs_semantic_review'}
     # Content-addressed immutable candidates; the manifest is written last.
-    for name, content in (('prompt.txt', prompt), ('ledger.json', canonical(ledger))):
+    fact_rows = facts_sheet(plan, config)
+    for name, content in (('prompt.txt', prompt), ('ledger.json', canonical(ledger)),
+                          ('facts.txt', facts_text(fact_rows))):
         target = build / name
         if target.exists():
             if target.read_bytes().decode('utf-8') != content:
@@ -1284,6 +1511,7 @@ def compile_project(project, segment, plan):
                     'source_sha256': source_record['sha256'], 'config_sha256': plan['config_sha256'],
                     'ledger_sha256': digest(canonical(ledger))})
     return {'build': build_relative, 'prompt': str(build / 'prompt.txt'), 'ledger': str(build / 'ledger.json'),
+            'facts': str(build / 'facts.txt'), 'fact_rows': fact_rows,
             'plan_sha256': plan_hash, 'prompt_sha256': prompt_hash, 'errors': errors,
             'warnings': sum(d.level == 'WARN' for d in diagnostics), 'warning_groups': grouped_warnings,
             'stats': stats, 'status': ledger['status'], 'diagnostics': checks}

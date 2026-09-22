@@ -3,7 +3,7 @@ name: seedance-shot-director
 description: "将完整剧本、片段或对白转为 Seedance 2.0/2.5 中文国风漫剧分镜提示词；支持原文保真、默认轻度的剧本审阅（语法错漏与台词换行规范化）、独立编剧建议与局部镜头修改。"
 ---
 
-# Seedance Shot Director V1.26
+# Seedance Shot Director V1.27
 
 ## 启动约定
 
@@ -58,6 +58,10 @@ description: "将完整剧本、片段或对白转为 Seedance 2.0/2.5 中文国
 9. 机位与人物台账是硬约束：15 秒块固定机位 ≤2（6–7 镜块 ≤3）、每块至少 1 个移动镜头、不得连续三镜硬切、硬切占比 ≤50%、同场景每 3 个连续块至少 1 次环绕/升降/摇摄；根级 `cast`（必要时配 `aliases`）锁定每场人物，人物消失要标 `offscreen`（画外）或写 `departed` 离场依据，新人物首次出现必须绑定来源节拍，直投 `人物：` 只列可见角色、画外角色单独成行。见 [camera-transition.md](references/camera-transition.md)、[unified-plan.md](references/unified-plan.md) 与 [compiler-field-contract.md](references/compiler-field-contract.md)。
 
 10. 台词与其可并行的动作必须并行（边说边走、边骂边指），`tone` 按来源逐句扫一遍：来源含可听情绪（骂、哭、颤、笑、狠、虚弱、迟疑、狂喜等）的话轮必须填语气，系统与旁白类保持平稳。可并行却串行、或该填语气却留空，都会被脚本报出，见 [core-invariants.md](references/core-invariants.md) 与 [unified-plan.md](references/unified-plan.md)。
+
+11. 能推导的事实一律不手写：`场景：` 由根级 `scenes`（`{scene_id: 场景名}`）查表得出，同一 `scene_id` 必须同名；`人物：` 只列本块镜头里真实出现的角色，未入镜的写 `画外：`（`offscreen`）；`scene_design` 只写持久背景层，`blocking` 逐块按当下站位写，设计段出现本块未登场角色会被报出。这三道事实门禁由 `compile_plan.py` 机械检查，见 [compiler-field-contract.md](references/compiler-field-contract.md)。
+
+12. 交付契约：分段文案进入分镜后连续推进，不停顿、不等授权，直到整段 `compile`、五项语义复核与 `finalize` 完成才算交付；每块的 `facts` 自检表（场景名、可见人物、发声角色、无口播区间、语气覆盖、音效来源）红项必须清零。单轮无法写完时，必须显式写明已完成块号与剩余块号，不得用某一批充当完成。
 
 ## 四、编译、复核与交付
 

@@ -12,6 +12,8 @@
 2b. 逐句扫语气：来源含可听情绪（骂、哭、颤、笑、狠、虚弱、迟疑、狂喜等）的话轮必须填 `tone`，系统与旁白类保持平稳；`compile` 的 `tone_coverage` 与 `check-block` 的同类字段用于逐块核对。可并行的台词与动作必须并行，不把动作排成无口白段。
 3. 完整起草只保留“当前块＋下一块入口”；下一块入口确定后再冻结上一块边界，不提前写完全部块。
 4. 第 1 块先跑编译管线冒烟：`check-block --block 1` 局部通过，并用同一份规划跑一次 `compile` 确认风格行、人物行、时间轴与台词渲染可编译；只起草一块时“来源覆盖不完整”类错误属预期，其他错误必须为 0。冒烟通过再起草第 2 块，更换话轮分段方式时重跑冒烟。
+
+4b. 每块起草完先看事实自检表（`check-block` 的 `facts`）：场景名与 `scene_id` 是否一致、人物行是否只列了本块入镜角色、发声角色与音效来源是否齐全。整段 `compile` 会另出 `facts.txt`（含无口播头／中／尾区间与语气覆盖），红项清零后才进入语义复核。
 5. 每完成一块写进同一份规划并立即 `check-block`；硬错误先局部修复再推进。规划按 3–4 块一批分次写入并即时检查，单次巨型写入一旦失败就要整份重发，成本远高于分批。
 
 ## 命令流程
@@ -27,7 +29,7 @@ python -B scripts/compile_plan.py finalize --project <项目目录> --segment se
 
 `context` 返回锁定来源、实际配置摘要、`config_sha256`、默认 `plan_schema_version=5` 和语义复核项；不假填版本、摘要或模型。V5 精简例子见 [plan-example-v5.json](plan-example-v5.json)，对应来源见 [plan-example-source.txt](plan-example-source.txt)。[plan-example.json](plan-example.json) 仅保留为 V4 兼容例子。
 
-`check-block` 只读检查 V5 规划里指定的已起草块；省略 `--block` 时检查当前最后一块。进行中的 `blocks` 可只含已起草前缀，`beats` 可随块累加。输出局部硬错误、警告、镜数、静默镜数、镜头层统计和边界是否确认；最多展示 8 条诊断，不写正式候选。已有下一块时自动读取其时空；没有下一块时用根级 `boundary_context.outgoing` 指出真实后继的时空；若后继尚未知且暂填 `null`，结果为 `provisional`，仅按同一时空临时检查，下一块入口确定后必须重查交界。确认当前块确为整段末块且没有外部后继时用 `--final-block`，仅表示尾部局部检查；不能据此宣称来源已完整覆盖。正式完整规划中的 `boundary_context.outgoing=null` 仍只表示确无后继。
+`check-block` 只读检查 V5 规划里指定的已起草块；省略 `--block` 时检查当前最后一块。进行中的 `blocks` 可只含已起草前缀，`beats` 可随块累加。输出局部硬错误、警告、镜数、静默镜数、镜头层统计、`tone_coverage`、本块 `facts`（场景名、可见人物、发声角色、无口播区间等）和边界是否确认；最多展示 8 条诊断，不写正式候选。已有下一块时自动读取其时空；没有下一块时用根级 `boundary_context.outgoing` 指出真实后继的时空；若后继尚未知且暂填 `null`，结果为 `provisional`，仅按同一时空临时检查，下一块入口确定后必须重查交界。确认当前块确为整段末块且没有外部后继时用 `--final-block`，仅表示尾部局部检查；不能据此宣称来源已完整覆盖。正式完整规划中的 `boundary_context.outgoing=null` 仍只表示确无后继。
 
 `check-block` 不检查未起草来源的全段覆盖，也不登记或冻结块；当前块修改后须重查，交界改变时重查相邻块。`compile` 只在全部块完成后运行一次全段机械硬检查，返回 `prompt.txt`、`ledger.json`、诊断、`warning_groups`、镜头层 `stats` 与候选摘要。不对同一候选再单独运行一次校验器，也不把局部通过视为最终交付。
 
@@ -54,7 +56,9 @@ V5 复核记录只包含真实语义判断：
 
 ## 场景包与分次写入
 
-同一 `scene_id` 的块共用一份**场景包**：块级抬头（`scene`、`atmosphere`）、`scene_design` 七项与 `ambient_effects` 只定义一次，其余块逐字复用，只改与该块视角、时间、人物状态有关的项。`后景是…` 这类背景层短语在相邻块必须逐字一致，否则模型会在个别块里长出新的树林、楼阁或院落；复用一份场景包同时满足这条机械检查并显著减少写作量。
+同一 `scene_id` 的块共用**持久场景包**：块级抬头（`scene`、`atmosphere`）、`scene_design` 的 `lighting`／`tone`／`layering`／`depth_design`／`composition`／`environment` 与 `ambient_effects` 只定义一次，其余块逐字复用。`后景是…` 这类背景层短语在相邻块必须逐字一致，否则模型会在个别块里长出新的树林、楼阁或院落。
+
+`blocking`（人物站位）**不进共享包**：它逐块按当下站位单独写。否则会把后面才发生的站位（尚未登场的门派、还没跑近的孩子）抄进提前的块；设计段里出现本块 `characters` 之外的角色名会被判为“提到本块未登场角色”。
 
 规划按 3–4 块一批分次写入并即时 `check-block`。话轮时间轴默认按表演逐句设计；追求速度时可用 `plan_voices.py --text` 的建议区间批量生成初稿，再只回调情绪停顿与重音异常的少数话轮，不逐句试错。
 
@@ -69,6 +73,7 @@ V5 复核记录只包含真实语义判断：
 - `beats`
 - `blocks`
 - 可选 `cast`（`{scene_id: [角色名]}`，本场在场人物台账）与 `aliases`（`{群体名: [成员名]}`，例如“家人”）
+- 可选 `scenes`（`{scene_id: 场景名}`）：场景名由查表得出，直投 `场景：` 不再手写；同一 `scene_id` 必须对应同一场景名。
 
 `boundary_context` 只含 `incoming` 与 `outgoing`；每项为 `null` 或 `{"scene_id":"…","time_id":"…"}`。`null` 表示锁定来源在该方向确实没有相邻片段，不是“未知”。处理中段、分批或局部修改时从全剧索引或相邻台账填真实时空。
 
@@ -89,7 +94,7 @@ V5 复核记录只包含真实语义判断：
 每块可选：
 
 - `time_label`（元数据“时间”，缺省由 `time_id` 推导）、`weather`（缺省“无”）
-- `scene_design`：对象，七项必填 `lighting`、`tone`、`layering`、`depth_design`、`blocking`、`composition`、`environment`，按顺序编译成块级设计段
+- `scene_design`：对象，七项必填 `lighting`、`tone`、`layering`、`depth_design`、`blocking`、`composition`、`environment`，按顺序编译成块级设计段；其中六项（除 `blocking`）与同场景其他块逐字复用，`blocking` 逐块按当下站位写
 - `track`：`文戏`（默认）或 `武戏`，决定镜位引导句用中性词还是战斗词
 - `header`、`ending`、`silent_head`、`silent_tail`、`ambient_effects`、`entry`、`exit`、`notes`、`departed`（本块离场的角色名列表，作为“人物消失”的依据）
 
