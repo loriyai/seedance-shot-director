@@ -3,7 +3,7 @@ name: seedance-shot-director
 description: "将完整剧本、片段或对白转为 Seedance 2.0/2.5 中文国风漫剧分镜提示词；支持原文保真、默认轻度的剧本审阅（语法错漏与台词换行规范化）、独立编剧建议与局部镜头修改。"
 ---
 
-# Seedance Shot Director V1.25
+# Seedance Shot Director V1.26
 
 ## 启动约定
 
@@ -25,6 +25,8 @@ description: "将完整剧本、片段或对白转为 Seedance 2.0/2.5 中文国
 4. 完整剧本阶段只问三项：目标时长、风格、是否输出资产列表。模型由时长默认——15 秒用 Seedance 2.0，30 秒用 Seedance 2.5，不再单独询问；画幅 16:9、无配乐、自动收尾、执行简版沿用默认，不逐项追问。风格按 [style-profiles.md](references/style-profiles.md) 原样完整展示三项。用户回答后先回一句配置回执再继续。见 [model-and-production-config.md](references/model-and-production-config.md)。
 5. 用户发送分段文案时，先原样保存 `V0`，不做其他处理，并立即给出两个选项：轻度剧本审阅、直接按原版分镜。每次都重新询问，不沿用上一段的选择，也不写入持续偏好。用户选择后才进入审阅或直接分镜，见 [intake-gate.md](references/intake-gate.md)。
 
+分段文案超过约 6 个生成块或 90 秒时，先按来源算出大致块数与时长并报一行体量，默认按批推进（每批 3–4 块），不逐块停顿，也不把超长段落静默按单块交付。
+
 ## 二、剧本审阅快速路径
 
 - 审阅档位只由本次分段文案收到的选择决定：每次发送分段文案都重新询问，不读取上次选择，不保存持续偏好。
@@ -43,7 +45,7 @@ description: "将完整剧本、片段或对白转为 Seedance 2.0/2.5 中文国
 1. 锁定来源版本，复用 `source_sha256` 一致的审阅阶段预检侧车；否则只运行一次 `prepare_source.py`。对当前片段只做一次轻量全段预扫，定位时空跳转、话轮顺序、长台词、关键动作结果和末尾容量；不预写每块镜头与逐句时间。按 [dialogue-normalization.md](references/dialogue-normalization.md) 处理，对白容量见 [dialogue-capacity.md](references/dialogue-capacity.md)。起草前先读一次 [compiler-field-contract.md](references/compiler-field-contract.md)，按那里的字段与话轮编码工作；字段报错按对照表定位，不靠试错、不重读编译器源码。
 2. 先锁定全局骨架，再逐块起草。骨架一次性确定各生成块的时空边界、话轮分配、尾部预算与留白位置，不先写全部镜头；完整起草只保留“当前块＋下一块入口”，下一块入口确定后再冻结上一块边界。骨架不可省：切点与留白互相依赖，缺了骨架会在尾部容量上反复回调。骨架定稿后先跑一次 `scripts/plan_voices.py`：`--text` 预计算每句话轮的可发音单位、各语速档的可行区间与合法切分点，`--plan` 在写镜头前做一次骨架覆盖差分（漏句、调序、单位总量、档位越界与块内重叠），把这些硬错误清零后再起草，不要等收尾才发现。
 3. 依 [generation-block-splitting.md](references/generation-block-splitting.md) 从来源开头逐块推进：只精排当前块，并看下一块入口以确认切点、时空和尾部预算；按 [shot-splitting.md](references/shot-splitting.md) 与 [timing-allocation.md](references/timing-allocation.md) 定镜。同一话轮可跨镜或跨块，但只用核心不变量允许的切点。末尾容量冲突只回调必要的相邻块。
-4. 第 1 块起草后先跑一次编译管线冒烟：`check-block --block 1` 必须局部通过，并用同一份规划跑一次 `compile` 确认风格行、人物行、时间轴与台词渲染可编译（此时只有覆盖类错误属预期）。冒烟通过后再起草第 2 块；更换话轮分段方式时重跑冒烟。每完成一块，把该块的来源节拍、人物、镜头、声音写进同一份 [unified-plan.md](references/unified-plan.md) 规划，并立即运行只读 `check-block`；硬错误先局部修复再推进。`check-block` 的局部通过不等于整段覆盖通过；不要每添一块就重跑全段 `compile`。
+4. 第 1 块起草后先跑一次编译管线冒烟：`check-block --block 1` 必须局部通过，并用同一份规划跑一次 `compile` 确认风格行、人物行、时间轴与台词渲染可编译（此时只有覆盖类错误属预期）。冒烟是内部质检闸门，不是交付边界：通过后继续写完本批（3–4 块）再交付，不逐块停顿，也不以"逐块通过"充当交付物；更换话轮分段方式时重跑冒烟。每完成一块，把该块的来源节拍、人物、镜头、声音写进同一份 [unified-plan.md](references/unified-plan.md) 规划，并立即运行只读 `check-block`；硬错误先局部修复再推进。`check-block` 的局部通过不等于整段覆盖通过；不要每添一块就重跑全段 `compile`。
 5. 默认使用 `schema_version=5`。V5 中：
    - 镜头级 `action_basis` 在 V5 不接受，一律省略；
    - 话轮 `profile` 默认“短剧常速”，`pause` 默认 0.2 秒，仅不同时填写；
@@ -54,6 +56,8 @@ description: "将完整剧本、片段或对白转为 Seedance 2.0/2.5 中文国
 7. 块头与块级设计按 [prompt-template.md](references/prompt-template.md)：抬头两行（风格选项原文＋中文执行质感＋英文质感前缀；英文禁止项）、元数据（人物／画外／场景·时间·天气／音频）、块级设计七项（光照、色彩、层次、景深、站位、构图、环境）。`场景：` 只写场景名，空间与道具细节留在设计段；`声音安排：` 只在真有时间约束时输出。除抬头英文外正文全中文。
 8. 需要构图、空间、转场、情绪、动作或战斗的专项指导时，由预诊断选择相应文件，不默认全部读取。`@素材` 或剧情内文字见 [asset-binding-and-screen-text.md](references/asset-binding-and-screen-text.md)。
 9. 机位与人物台账是硬约束：15 秒块固定机位 ≤2（6–7 镜块 ≤3）、每块至少 1 个移动镜头、不得连续三镜硬切、硬切占比 ≤50%、同场景每 3 个连续块至少 1 次环绕/升降/摇摄；根级 `cast`（必要时配 `aliases`）锁定每场人物，人物消失要标 `offscreen`（画外）或写 `departed` 离场依据，新人物首次出现必须绑定来源节拍，直投 `人物：` 只列可见角色、画外角色单独成行。见 [camera-transition.md](references/camera-transition.md)、[unified-plan.md](references/unified-plan.md) 与 [compiler-field-contract.md](references/compiler-field-contract.md)。
+
+10. 台词与其可并行的动作必须并行（边说边走、边骂边指），`tone` 按来源逐句扫一遍：来源含可听情绪（骂、哭、颤、笑、狠、虚弱、迟疑、狂喜等）的话轮必须填语气，系统与旁白类保持平稳。可并行却串行、或该填语气却留空，都会被脚本报出，见 [core-invariants.md](references/core-invariants.md) 与 [unified-plan.md](references/unified-plan.md)。
 
 ## 四、编译、复核与交付
 

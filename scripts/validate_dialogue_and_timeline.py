@@ -72,6 +72,9 @@ MISSING_CONTEXT = re.compile(r"保持十年前.{0,8}构图|原来的位置|上�
 EPSILON = 1e-6
 MAX_SHOT_SECONDS = 5.0
 SPEECH_SPLIT_PUNCTUATION = frozenset('，、；：。！？…,.!?;:')
+EMOTION_SIGNAL = re.compile(
+    r'他娘|干你娘|娘的|妈的|老子|放屁|狗屁|混蛋|畜生|滚出去|滚开|闭嘴|我呸|'
+    r'哈哈|我恨|该死|天杀|去死|啊啊|呜呜|呐喊着|[！!]{2,}|[？?]{2,}')
 SPEECH_BOUNDARY_FORBIDDEN_ADJACENT = frozenset('“”‘’「」『』（）()【】[]《》<>—-')
 AMBIGUOUS_SPEAKER = re.compile(
     r"(?<![\u4e00-\u9fff])(?:他|她|对方|某人|角色)"

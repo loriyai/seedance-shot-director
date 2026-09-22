@@ -16,7 +16,7 @@ class V119DocumentationContractTests(unittest.TestCase):
         skill = self.read('SKILL.md')
         core = self.read('references/core-invariants.md')
         enhancement = self.read('references/script-enhancement.md')
-        self.assertIn('Seedance Shot Director V1.25', skill)
+        self.assertIn('Seedance Shot Director V1.26', skill)
         self.assertIn('轻度剧本审阅', skill)
         self.assertIn('轻度剧本审阅', self.read('references/intake-gate.md'))
         self.assertIn('多字、少字、错别字', enhancement)
@@ -54,6 +54,12 @@ class V119DocumentationContractTests(unittest.TestCase):
         self.assertIn('strip_markers.py', enhancement)
         self.assertIn('derive_review.py', skill)
         self.assertIn('derive_review.py', enhancement)
+        self.assertIn('冒烟是内部质检闸门，不是交付边界', skill)
+        self.assertIn('超过约 6 个生成块或 90 秒', skill)
+        self.assertIn('不得为凑够 5 镜', self.read('references/generation-block-splitting.md'))
+        self.assertIn('逐句扫语气', self.read('references/unified-plan.md'))
+        self.assertIn('无口播填空', self.read('references/compiler-field-contract.md'))
+        self.assertIn('超长分段前置提示', self.read('references/intake-gate.md'))
 
     def test_field_contract_is_pinned_for_drafting(self):
         contract = self.read('references/compiler-field-contract.md')

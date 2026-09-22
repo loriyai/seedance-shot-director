@@ -15,7 +15,8 @@ from project_state import ProjectState, digest
 from validate_dialogue_and_timeline import (validate, validate_structure, validate_voice_pacing,
     VOICE_PROFILES, Diagnostic,
     extract_output_dialogue, canonical_speaker, validate_sound_arrangement_layout,
-    source_backed_speech_boundary, speaker_parts, HIDDEN_CUT, ACTION_CAMERA_HIDDEN_CUT)
+    source_backed_speech_boundary, speaker_parts, HIDDEN_CUT, ACTION_CAMERA_HIDDEN_CUT,
+    EMOTION_SIGNAL)
 
 
 V3_REVIEW_CHECKS = (
@@ -1049,11 +1050,64 @@ def render(plan, source, config, *, audit=False):
     return '\n\n'.join(output) + '\n'
 
 
+GAP_LIMIT_RATIO = 0.15
+GAP_LIMIT_FLOOR = 2.0
+
+
+def tone_gaps(block) -> list[str]:
+    """话轮文本含明显可听情绪却没填 tone 的话轮 ID。"""
+    return [voice['id'] for voice in block.get('voices') or []
+            if not (voice.get('tone') or '').strip()
+            and EMOTION_SIGNAL.search(voice.get('text', ''))]
+
+
+def tone_report(block) -> dict:
+    voices = block.get('voices') or []
+    return {
+        'voices': len(voices),
+        'with_tone': sum(1 for voice in voices if (voice.get('tone') or '').strip()),
+        'signal_without_tone': tone_gaps(block),
+    }
+
+
+def dialogue_gap_diagnostics(block, head, tail, label) -> list:
+    """块内无口播填空：扣除必需的跨时空留白后，头部与内部空档超过上限即警告。"""
+    voices = sorted(((v['start'], v['end']) for v in block.get('voices') or []),
+                    key=lambda item: item[0])
+    if not voices:
+        return []
+    limit = max(GAP_LIMIT_FLOOR, GAP_LIMIT_RATIO * block['duration'])
+    gaps = [('开头', voices[0][0] - head)]
+    cursor = voices[0][1]
+    for start, end in voices[1:]:
+        gaps.append(('中间', start - cursor))
+        cursor = max(cursor, end)
+    tail_gap = block['duration'] - voices[-1][1] - tail
+    warnings = []
+    for position, gap in gaps:
+        if gap > limit + 1e-6:
+            warnings.append(Diagnostic(
+                'WARN',
+                f'{position}无口播约{gap:.1f}秒（上限约{limit:.1f}秒）：疑似填秒，'
+                f'请把可并行的台词与动作并行，或把相邻块内容借进本块。', label))
+    if tail_gap > limit + 1e-6:
+        warnings.append(Diagnostic(
+            'WARN',
+            f'尾部无口播约{tail_gap:.1f}秒（上限约{limit:.1f}秒）：疑似填秒，'
+            f'请按自然时长取整，或把相邻块内容借进本块。', label))
+    return warnings
+
+
 def validate_plan_timing(plan, config):
     diagnostics = []
     for index, block in enumerate(plan['blocks']):
         label = f'{index+1:02d}'
         head, tail, _ = block_handles(plan, index, config)
+        if plan.get('schema_version', 1) >= 5:
+            diagnostics += dialogue_gap_diagnostics(block, head, tail, label)
+            for voice_id in tone_gaps(block):
+                diagnostics.append(Diagnostic(
+                    'WARN', f'{voice_id} 台词含明显可听情绪但未填 tone：疑似缺少语气。', label))
         voices = {v['id']: v for v in block['voices']}
         if block['shots'] and (head > block['shots'][0]['end'] or tail > block['duration']-block['shots'][-1]['start']):
             diagnostics.append(Diagnostic('ERROR', '首尾无口播衔接时段必须容纳在首镜和末镜内。', label))
@@ -1158,6 +1212,7 @@ def check_block(project, segment, plan, block_number=None, *, final_block=False)
         'warnings': warnings,
         'shot_count': len(block['shots']),
         'silent_shots': prompt.count('环境音效：静默。') + prompt.count('本镜静默'),
+        'tone_coverage': tone_report(block),
         'stats': stats,
         'diagnostics': [asdict(d) for d in sorted(diagnostics, key=lambda d: d.level != 'ERROR')[:8]],
         'coverage': '未检查整段来源覆盖；全部块完成后仍须运行compile和语义复核。',

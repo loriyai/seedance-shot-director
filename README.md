@@ -1,6 +1,8 @@
 # Seedance Shot Director
 
-版本：V1.25
+版本：V1.26
+
+V1.26 补三类规则漏洞并加对应机械检查：一是"凑时长"只在尾部被检查，块内无口播填空没人管——`compile_plan.py` 现在按 `max(2.0, 0.15×块时长)` 检查头部、中间与尾部无口播区间（扣除跨时空必需的 1 秒留白），并要求台词与可并行动作并行，`core-invariants.md`、`generation-block-splitting.md`、`timing-allocation.md` 同步写明"15 秒块 5–7 镜是上限框架，不是时长目标"。二是 `tone` 是可选字段、缺语气没人报——情绪信号词命中而语气留空时 `compile_plan.py` 与 `plan_voices.py` 都报"疑似缺少语气"，`check-block` 增列 `tone_coverage`，`unified-plan.md` 起草顺序加入"逐句扫语气"。三是跨块片段不能用 `span` 拆分，超过单镜容量会在起草中期才暴露——`plan_voices.py --plan` 按语速档上限在骨架阶段直接报错。交付节奏方面，`SKILL.md` 明确冒烟是内部闸门而非交付边界（通过后写完本批再交付），`intake-gate.md` 增加超长分段前置体量提示与按批推进。新增 `scripts/test_v126_rule_hardening.py` 回归这些检查。
 
 V1.25 把审阅阶段的机械步骤收成一条命令并去掉重复往返：新增 `scripts/derive_review.py`，用一份编辑清单 JSON（`line_edits` 最小原位替换 + `space_notes` 仅标记）一次派生完整审阅稿，同遍完成话轮换行规范化、标记落位与覆盖差分闸门，`old` 找不到唯一整行或差分不通过时直接报错且不写文件，已有输出不覆盖；配套 `scripts/test_v125_review_derivation.py` 回归这些闸门与剥壳链路。同一会话内已读的 `core-invariants.md`、本阶段参考件与 `source_sha256` 未变的预检侧车改为复用，不再重复读取；完整审阅稿以文件交付，聊天只列变化点与疑点，用户明确要求时才逐字展示；`intake-gate.md` 明确保存 V0 后不为核对与全剧原稿的差异额外做一轮比对。
 

@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 from validate_dialogue_and_timeline import (
+    EMOTION_SIGNAL,
     VOICE_PROFILES,
     _source_speech_candidate_index,
     _speech_candidate_key,
@@ -38,6 +39,7 @@ DIAGNOSTIC_LIMIT = 8
 ALLOWED = "\u3400-\u4dbf\u4e00-\u9fff"
 PUNCTUATION = r"\s，。！？、；：…“”「」『』,.!?;:\-—"
 UNCERTAIN = re.compile("[^" + ALLOWED + PUNCTUATION + "]")
+MAX_SHOT_SECONDS = 5.0
 
 
 def pace_band(units: int, profile: str) -> tuple[float, float]:
@@ -111,6 +113,8 @@ def source_utterances(source: str) -> list[dict]:
 def plan_report(source: str, plan: dict) -> dict:
     diagnostics: list[dict] = []
     blocks = plan.get('blocks') or []
+    utterances = source_utterances(source)
+    full_texts = {item['text'] for item in utterances}
     planned: list[dict] = []
     for block_index, block in enumerate(blocks, 1):
         duration = block.get('duration')
@@ -141,6 +145,23 @@ def plan_report(source: str, plan: dict) -> dict:
                 continue
             rate = units / voiced
             low, high = VOICE_PROFILES[profile]
+            fragment = bool(voice_text) and voice_text not in full_texts and any(
+                voice_text in item['text'] for item in utterances)
+            if fragment:
+                capacity = (MAX_SHOT_SECONDS - pause) * high
+                if units > capacity + 1e-6:
+                    diagnostics.append({
+                        'level': 'ERROR',
+                        'message': f'跨块片段无法用 span 拆分：约{units}单位超过单镜上限'
+                                   f'（约{capacity:.0f}单位），须继续按合法标点切分。',
+                        **label,
+                    })
+            if EMOTION_SIGNAL.search(voice_text) and not (voice.get('tone') or '').strip():
+                diagnostics.append({
+                    'level': 'WARN',
+                    'message': '台词含明显可听情绪但未填 tone：疑似缺少语气。',
+                    **label,
+                })
             if UNCERTAIN.search(voice_text):
                 diagnostics.append({'level': 'WARN', 'message': f'约{units}单位/{voiced:g}秒；含数字或外语，按实际读法复核。', **label})
             elif rate < low - 1e-6 or rate > high + 1e-6:
@@ -155,7 +176,6 @@ def plan_report(source: str, plan: dict) -> dict:
                 diagnostics.append({'level': 'ERROR', 'message': f'与本块上一话轮时间重叠（上一段结束 {previous_end} 秒）。', **label})
             previous_end = end
 
-    utterances = source_utterances(source)
     joined = ''.join(record.get('text', '') for record in planned)
     missing, out_of_order = [], []
     cursor = -1
