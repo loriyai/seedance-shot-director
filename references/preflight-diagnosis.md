@@ -36,7 +36,8 @@
 - `generation-block-splitting.md`
 - `shot-splitting.md`、`timing-allocation.md`
 - `unified-plan.md`
-- `prompt-template.md`（含块契约与完整示例）
+- `prompt-template.md`（块契约与直投骨架）
+- `prompt-example.md`（起草第 1 块前读一次用于格式校准，同一会话内不重复读）
 - `qc-fallback.md`
 
 不另建平行台账：V5 的节拍、人物、声音、镜头与覆盖复核清单都在同一份统一规划里。

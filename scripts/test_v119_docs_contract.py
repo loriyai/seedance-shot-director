@@ -60,6 +60,12 @@ class V119DocumentationContractTests(unittest.TestCase):
         self.assertIn('逐句扫语气', self.read('references/unified-plan.md'))
         self.assertIn('无口播填空', self.read('references/compiler-field-contract.md'))
         self.assertIn('超长分段前置提示', self.read('references/intake-gate.md'))
+        template = self.read('references/prompt-template.md')
+        example = self.read('references/prompt-example.md')
+        self.assertIn('prompt-example.md', template)
+        self.assertNotIn('[0秒-2秒]', template)
+        self.assertIn('[0秒-2秒]', example)
+        self.assertIn('prompt-example.md', self.read('references/preflight-diagnosis.md'))
 
     def test_field_contract_is_pinned_for_drafting(self):
         contract = self.read('references/compiler-field-contract.md')
