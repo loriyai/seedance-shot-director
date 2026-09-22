@@ -128,31 +128,31 @@ SLOT_LEAD_2 = {'lead': '紧接着光影交错，镜头{m}逼近至{sz}，通过{
                'lead_static': '紧接着光影交错，镜头保持在{sz}，通过{t}实现视觉衔接。',
                'd': '{d}将背景剥离，', 'end': '，', 'prefix': '', 'react': '，引发{r}'}
 SLOT_LEAD_3 = {'lead': '视线随之{t}流转，以{m}锁定{sz}。', 'd': '在{d}的烘托中，', 'end': '，',
-               'prefix': '', 'react': '，使得{r}'}
+               'prefix': '', 'react': '，强制使得{r}'}
 SLOT_LEAD_4 = {'lead': '随着{t}掠过，机位{m}切换为{sz}。',
                'lead_static': '随着{t}掠过，机位保持为{sz}。', 'd': '{d}引导焦点转移，此时',
                'end': '，', 'prefix': '', 'react': '，周围的{r}'}
 SLOT_LEAD_5 = {'lead': '毫无征兆地{t}，镜头{m}捕捉到{sz}。',
                'lead_static': '毫无征兆地{t}，镜头捕捉到{sz}。', 'd': '{d}中，', 'end': '，',
-               'prefix': '', 'react': '，随之{r}'}
+               'prefix': '', 'react': '，强制刻画出{r}'}
 SLOT_LEAD_6 = {'lead': '气流激荡间，以{t}带出{m}的{sz}。', 'lead_soft': '片刻静默间，以{t}带出{m}的{sz}。',
                'd': '在{d}的视觉牵引下，', 'end': '，', 'prefix': '', 'react': '，逼得{r}'}
 SLOT_LEAD_7 = {'lead': '空间仿佛陷入极其短暂的死寂，{t}后机位{m}定格于{sz}。',
                'lead_static': '空间仿佛陷入极其短暂的死寂，{t}后机位定格于{sz}。',
-               'd': '{d}将周遭一切虚化，', 'end': '，', 'prefix': '', 'react': '，可见{r}'}
+               'd': '{d}将周遭一切虚化，', 'end': '，', 'prefix': '', 'react': '，强制描写{r}'}
 SLOT_LEAD_8 = {'lead': '刹那间{t}撕裂画面，镜头以极具张力的{m}展现{sz}。',
                'lead_soft': '画面在{t}中收紧，镜头以极具张力的{m}展现{sz}。',
                'lead_static': '刹那间{t}切入，镜头以极具张力的构图展现{sz}。', 'd': '{d}中，', 'end': '，',
-               'prefix': '', 'react': '，狂暴的能量导致{r}', 'react_soft': '，导致{r}'}
+               'prefix': '', 'react': '，狂暴的能量强制导致{r}', 'react_soft': '，强制导致{r}'}
 SLOT_LEAD_9 = {'lead': '余威未散，画面{t}过渡，镜头{m}对准{sz}。',
                'lead_soft': '情绪未散，画面{t}过渡，镜头{m}对准{sz}。',
                'lead_static': '情绪未散，画面{t}过渡，镜头对准{sz}。', 'd': '{d}下，', 'end': '，',
                'prefix': '', 'react': '，周遭{r}'}
 SLOT_LEAD_10 = {'lead': '视线借由{t}平缓，{m}带出{sz}。', 'd': '{d}重新交代空间位置，', 'end': '，',
-                'prefix': '', 'react': '，随之{r}'}
+                'prefix': '', 'react': '，强制刻画出{r}'}
 SLOT_LEAD_11 = {'lead': '最终，以极其深邃的{t}收束，镜头{m}拉至{sz}。',
                 'lead_static': '最终，以极其深邃的{t}收束，镜头停留在{sz}。',
-                'd': '{d}构建出完整的闭环空间，', 'end': '，', 'prefix': '', 'react': '，可见{r}'}
+                'd': '{d}构建出完整的闭环空间，', 'end': '，', 'prefix': '', 'react': '，强制描写{r}'}
 
 PROSE_SLOTS = {
     11: (SLOT_LEAD_1, SLOT_LEAD_2, SLOT_LEAD_3, SLOT_LEAD_4, SLOT_LEAD_5, SLOT_LEAD_6,
