@@ -16,7 +16,7 @@ class V119DocumentationContractTests(unittest.TestCase):
         skill = self.read('SKILL.md')
         core = self.read('references/core-invariants.md')
         enhancement = self.read('references/script-enhancement.md')
-        self.assertIn('Seedance Shot Director V1.27', skill)
+        self.assertIn('Seedance Shot Director V1.28', skill)
         self.assertIn('轻度剧本审阅', skill)
         self.assertIn('轻度剧本审阅', self.read('references/intake-gate.md'))
         self.assertIn('多字、少字、错别字', enhancement)
@@ -71,6 +71,9 @@ class V119DocumentationContractTests(unittest.TestCase):
         self.assertIn('scenes', self.read('references/unified-plan.md'))
         self.assertIn('blocking`（人物站位）**不进共享包', self.read('references/unified-plan.md'))
         self.assertIn('facts.txt', self.read('references/compiler-field-contract.md'))
+        self.assertIn('情绪或意图转折 > 语义停顿', skill)
+        self.assertIn('块内保留完整话轮', self.read('references/dialogue-normalization.md'))
+        self.assertIn('只写本镜真正发生的动态反馈', self.read('references/compiler-field-contract.md'))
 
     def test_field_contract_is_pinned_for_drafting(self):
         contract = self.read('references/compiler-field-contract.md')

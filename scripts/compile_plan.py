@@ -16,7 +16,7 @@ from validate_dialogue_and_timeline import (validate, validate_structure, valida
     VOICE_PROFILES, Diagnostic,
     extract_output_dialogue, canonical_speaker, validate_sound_arrangement_layout,
     source_backed_speech_boundary, speaker_parts, HIDDEN_CUT, ACTION_CAMERA_HIDDEN_CUT,
-    EMOTION_SIGNAL)
+    EMOTION_SIGNAL, analyse_source_preflight)
 
 
 V3_REVIEW_CHECKS = (
@@ -128,31 +128,31 @@ SLOT_LEAD_2 = {'lead': '紧接着光影交错，镜头{m}逼近至{sz}，通过{
                'lead_static': '紧接着光影交错，镜头保持在{sz}，通过{t}实现视觉衔接。',
                'd': '{d}将背景剥离，', 'end': '，', 'prefix': '', 'react': '，引发{r}'}
 SLOT_LEAD_3 = {'lead': '视线随之{t}流转，以{m}锁定{sz}。', 'd': '在{d}的烘托中，', 'end': '，',
-               'prefix': '', 'react': '，强制使得{r}'}
+               'prefix': '', 'react': '，使得{r}'}
 SLOT_LEAD_4 = {'lead': '随着{t}掠过，机位{m}切换为{sz}。',
                'lead_static': '随着{t}掠过，机位保持为{sz}。', 'd': '{d}引导焦点转移，此时',
                'end': '，', 'prefix': '', 'react': '，周围的{r}'}
 SLOT_LEAD_5 = {'lead': '毫无征兆地{t}，镜头{m}捕捉到{sz}。',
                'lead_static': '毫无征兆地{t}，镜头捕捉到{sz}。', 'd': '{d}中，', 'end': '，',
-               'prefix': '', 'react': '，强制刻画出{r}'}
+               'prefix': '', 'react': '，随之{r}'}
 SLOT_LEAD_6 = {'lead': '气流激荡间，以{t}带出{m}的{sz}。', 'lead_soft': '片刻静默间，以{t}带出{m}的{sz}。',
                'd': '在{d}的视觉牵引下，', 'end': '，', 'prefix': '', 'react': '，逼得{r}'}
 SLOT_LEAD_7 = {'lead': '空间仿佛陷入极其短暂的死寂，{t}后机位{m}定格于{sz}。',
                'lead_static': '空间仿佛陷入极其短暂的死寂，{t}后机位定格于{sz}。',
-               'd': '{d}将周遭一切虚化，', 'end': '，', 'prefix': '', 'react': '，强制描写{r}'}
+               'd': '{d}将周遭一切虚化，', 'end': '，', 'prefix': '', 'react': '，可见{r}'}
 SLOT_LEAD_8 = {'lead': '刹那间{t}撕裂画面，镜头以极具张力的{m}展现{sz}。',
                'lead_soft': '画面在{t}中收紧，镜头以极具张力的{m}展现{sz}。',
                'lead_static': '刹那间{t}切入，镜头以极具张力的构图展现{sz}。', 'd': '{d}中，', 'end': '，',
-               'prefix': '', 'react': '，狂暴的能量强制导致{r}', 'react_soft': '，强制导致{r}'}
+               'prefix': '', 'react': '，狂暴的能量导致{r}', 'react_soft': '，导致{r}'}
 SLOT_LEAD_9 = {'lead': '余威未散，画面{t}过渡，镜头{m}对准{sz}。',
                'lead_soft': '情绪未散，画面{t}过渡，镜头{m}对准{sz}。',
                'lead_static': '情绪未散，画面{t}过渡，镜头对准{sz}。', 'd': '{d}下，', 'end': '，',
                'prefix': '', 'react': '，周遭{r}'}
 SLOT_LEAD_10 = {'lead': '视线借由{t}平缓，{m}带出{sz}。', 'd': '{d}重新交代空间位置，', 'end': '，',
-                'prefix': '', 'react': '，强制刻画出{r}'}
+                'prefix': '', 'react': '，随之{r}'}
 SLOT_LEAD_11 = {'lead': '最终，以极其深邃的{t}收束，镜头{m}拉至{sz}。',
                 'lead_static': '最终，以极其深邃的{t}收束，镜头停留在{sz}。',
-                'd': '{d}构建出完整的闭环空间，', 'end': '，', 'prefix': '', 'react': '，强制描写{r}'}
+                'd': '{d}构建出完整的闭环空间，', 'end': '，', 'prefix': '', 'react': '，可见{r}'}
 
 PROSE_SLOTS = {
     11: (SLOT_LEAD_1, SLOT_LEAD_2, SLOT_LEAD_3, SLOT_LEAD_4, SLOT_LEAD_5, SLOT_LEAD_6,
@@ -426,6 +426,38 @@ def character_visibility_diagnostics(plan):
                 diagnostics.append(Diagnostic(
                     'WARN', f'镜头里出现了 {member}，但人物行未列；请核对是否漏写可见角色。',
                     label, '1'))
+    return diagnostics
+
+
+def source_utterance_texts(source: str) -> set:
+    """来源里可定位的话轮正文（含未机械归属的引号段）。"""
+    dialogues, _, unresolved = analyse_source_preflight(source)
+    texts = {line(item.text) for item in dialogues}
+    texts.update(line(item.text) for item in unresolved)
+    return {text for text in texts if text}
+
+
+def fragment_split_diagnostics(plan, source: str):
+    """同一块内出现同一话轮的多个片段时，提示可还原为完整话轮 + span。"""
+    diagnostics = []
+    if plan.get('schema_version', 1) < 5 or not source:
+        return diagnostics
+    utterances = source_utterance_texts(source)
+    for index, block in enumerate(plan['blocks'], 1):
+        label = f'{index:02d}'
+        owners = {}
+        for voice in block.get('voices') or []:
+            text = safe_line(voice.get('text', ''))
+            for utterance in utterances:
+                if text and text != utterance and text in utterance:
+                    owners.setdefault(utterance, []).append(voice['id'])
+                    break
+        for utterance, ids in owners.items():
+            if len(ids) > 1:
+                diagnostics.append(Diagnostic(
+                    'WARN', f'同一块内把同一话轮拆成多个片段（{"、".join(ids)}）：'
+                             f'块内应保留完整话轮并用 span 拆镜，切点优先落在情绪或意图转折处；'
+                             f'片段只用于跨块。', label, '1'))
     return diagnostics
 
 
@@ -1415,7 +1447,8 @@ def check_block(project, segment, plan, block_number=None, *, final_block=False)
     diagnostics += shot_language_diagnostics(local_plan)
     local_label = f'{block_number:02d}'
     local_checks = (cast_diagnostics(plan) + continuity_diagnostics(plan) + scene_diagnostics(plan)
-                    + character_visibility_diagnostics(plan) + design_entity_diagnostics(plan))
+                    + character_visibility_diagnostics(plan) + design_entity_diagnostics(plan)
+                    + fragment_split_diagnostics(plan, source))
     diagnostics += [item for item in local_checks if item.block in (local_label, None)]
     names = {canonical_speaker(v['speaker'], v['kind']) for v in block['voices']}
     actual, unassigned = extract_output_dialogue(prompt, names)
@@ -1476,6 +1509,7 @@ def compile_project(project, segment, plan):
     diagnostics += scene_diagnostics(plan)
     diagnostics += character_visibility_diagnostics(plan)
     diagnostics += design_entity_diagnostics(plan)
+    diagnostics += fragment_split_diagnostics(plan, source)
     names = {canonical_speaker(v['speaker'], v['kind']) for b in plan['blocks'] for v in b['voices']}
     actual, unassigned = extract_output_dialogue(prompt, names)
     expected, _ = extract_output_dialogue(audit_prompt, names)

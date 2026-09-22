@@ -3,7 +3,7 @@ name: seedance-shot-director
 description: "将完整剧本、片段或对白转为 Seedance 2.0/2.5 中文国风漫剧分镜提示词；支持原文保真、默认轻度的剧本审阅（语法错漏与台词换行规范化）、独立编剧建议与局部镜头修改。"
 ---
 
-# Seedance Shot Director V1.27
+# Seedance Shot Director V1.28
 
 ## 启动约定
 
@@ -62,6 +62,8 @@ description: "将完整剧本、片段或对白转为 Seedance 2.0/2.5 中文国
 11. 能推导的事实一律不手写：`场景：` 由根级 `scenes`（`{scene_id: 场景名}`）查表得出，同一 `scene_id` 必须同名；`人物：` 只列本块镜头里真实出现的角色，未入镜的写 `画外：`（`offscreen`）；`scene_design` 只写持久背景层，`blocking` 逐块按当下站位写，设计段出现本块未登场角色会被报出。这三道事实门禁由 `compile_plan.py` 机械检查，见 [compiler-field-contract.md](references/compiler-field-contract.md)。
 
 12. 交付契约：分段文案进入分镜后连续推进，不停顿、不等授权，直到整段 `compile`、五项语义复核与 `finalize` 完成才算交付；每块的 `facts` 自检表（场景名、可见人物、发声角色、无口播区间、语气覆盖、音效来源）红项必须清零。单轮无法写完时，必须显式写明已完成块号与剩余块号，不得用某一批充当完成。
+
+13. 台词切点与副反应归位：块内长话轮保留完整话轮并用 `span` 拆镜，片段只用于跨块；切点优先级为情绪或意图转折 > 语义停顿 > 单镜 5 秒上限 > 纯标点，不得为迁就 5 秒把骂人句与叙事句压进同一镜。`reaction` 只写本镜真正发生的动态反馈，静态位置与持续状态写进 `environment`／`blocking`；镜头渲染不再堆叠"强制"字样。块内片段会被脚本报出，见 [dialogue-normalization.md](references/dialogue-normalization.md) 与 [compiler-field-contract.md](references/compiler-field-contract.md)。
 
 ## 四、编译、复核与交付
 
